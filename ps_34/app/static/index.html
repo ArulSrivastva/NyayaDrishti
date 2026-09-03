@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Legal Metrology Compliance System</title>
+  <link rel="stylesheet" href="/static/app.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">LM</span>
+      <div>
+        <h1>Legal Metrology Compliance System</h1>
+        <p>Packaged Commodities Rules, 2011 — AI-assisted label inspection</p>
+      </div>
+    </div>
+    <div class="userbox" id="userbox" style="display:none">
+      <span id="username"></span>
+      <button id="logout" class="btn ghost">Logout</button>
+    </div>
+  </header>
+
+  <main>
+    <section id="authView" class="card authcard">
+      <h2>Inspector sign in</h2>
+      <form id="loginForm">
+        <label>Email <input type="email" id="email" required placeholder="inspector@example.gov.in" /></label>
+        <label>Password <input type="password" id="password" required placeholder="••••••••" /></label>
+        <button class="btn primary" type="submit">Sign in</button>
+      </form>
+      <p class="hint">Default admin: admin@lmcs.gov.in / admin1234</p>
+    </section>
+
+    <section id="inspectView" style="display:none">
+      <div class="grid">
+        <div class="card">
+          <h2>New inspection</h2>
+          <form id="inspectForm">
+            <label>Package photo <input type="file" id="imageInput" accept="image/*" required /></label>
+            <label>Product name (optional) <input type="text" id="productName" placeholder="e.g. ABC Biscuit" /></label>
+            <button class="btn primary" id="inspectBtn" type="submit">Run compliance inspection</button>
+          </form>
+          <div id="status"></div>
+          <div class="preview"><img id="previewImg" alt="selected image" hidden /></div>
+        </div>
+
+        <div id="resultCard" class="card" hidden>
+          <div class="resulthead">
+            <h2>Inspection <span id="inspectionId"></span></h2>
+            <span id="complianceBadge" class="badge"></span>
+            <span id="riskBadge" class="badge"></span>
+          </div>
+          <dl class="kv">
+            <dt>Product</dt><dd id="rProduct">—</dd>
+            <dt>MRP</dt><dd id="rMrp">—</dd>
+            <dt>Net Quantity</dt><dd id="rNetQty">—</dd>
+            <dt>Manufacturer</dt><dd id="rMfr">—</dd>
+            <dt>Packer</dt><dd id="rPacker">—</dd>
+            <dt>Importer</dt><dd id="rImporter">—</dd>
+            <dt>AI Confidence</dt><dd id="rConfidence">—</dd>
+            <dt>Risk</dt><dd id="rRisk">—</dd>
+          </dl>
+          <h3>Declarations</h3>
+          <table class="table" id="declTable"></table>
+          <h3>Rule results</h3>
+          <table class="table" id="ruleTable"></table>
+          <h3>Violations</h3>
+          <ul id="violationList" class="list"></ul>
+          <h3>Evidence</h3>
+          <div id="evidenceGrid" class="evidence"></div>
+          <h3>Inspector decision</h3>
+          <div class="decisionbar">
+            <button class="btn ok" data-decision="ACCEPT">Accept (PASS)</button>
+            <button class="btn danger" data-decision="REJECT">Reject (FAIL)</button>
+            <button class="btn ghost" data-decision="REVIEW">Mark REVIEW</button>
+            <input type="text" id="decisionReason" placeholder="reason (optional)" />
+          </div>
+          <div class="actions">
+            <button class="btn primary" id="historyBtn">Product history</button>
+            <button class="btn primary" id="reportBtn">Download PDF report</button>
+          </div>
+          <div id="historyPanel" hidden>
+            <h3>Product history</h3>
+            <pre id="historyText"></pre>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+  <script src="/static/app.js"></script>
+</body>
+</html>

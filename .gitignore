@@ -1,0 +1,60 @@
+# Built-in and IDE
+*.iml
+.idea/
+.DS_Store
+Thumbs.db
+*.log
+local.properties
+/captures
+.externalNativeBuild
+.cxx
+.artifacts
+
+# Android & Gradle
+.gradle/
+.kotlin/
+build/
+**/build/
+*.apk
+*.aab
+
+# Archives & Backups
+ps34.zip
+
+# Python & Caches
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+**/.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+ps_34/.venv
+ps_34/venv
+
+# Databases
+*.db
+*.sqlite
+*.sqlite3
+ps_34/test_lmcs.db
+
+# Python Runtime Storage (Preserve .gitkeep)
+ps_34/uploads/*
+!ps_34/uploads/.gitkeep
+ps_34/evidence/*
+!ps_34/evidence/.gitkeep
+ps_34/reports/*
+!ps_34/reports/.gitkeep
+ps_34/test_uploads/
+ps_34/test_evidence/
+ps_34/test_reports/
+
+# Documents, Media & Presentations
+*.pptx
+*.pdf
+*.mp4
+*.mov
+*.avi
+one.md
+REPO_CLEANUP_AUDIT.md

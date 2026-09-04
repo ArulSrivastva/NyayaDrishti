@@ -936,15 +936,15 @@ Calculate a simple risk level.
 ```text
 0 violations
     ↓
-LOW 🟢
+LOW
 
 1–2 violations
     ↓
-MEDIUM 🟡
+MEDIUM
 
 Repeated violations
     ↓
-HIGH 🔴
+HIGH
 ```
 
 Example:
@@ -1146,7 +1146,7 @@ Product: ABC Biscuit
 
 Inspections: 4
 
-Risk: HIGH 🔴
+Risk: HIGH
 
 Repeated violations:
 • MRP — 3 times

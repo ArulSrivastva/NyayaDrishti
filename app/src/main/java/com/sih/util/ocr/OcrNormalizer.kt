@@ -102,13 +102,25 @@ object OcrNormalizer {
             substitutions.add("Multiple spaces -> single space")
         }
 
-        val mrpPattern = "(?i)\\b(m\\.r\\.p\\.?)\\b".toRegex()
+        val mrpPattern = "(?i)\\b(m\\.r\\.p\\.?|m\\s*r\\s*p|mrp)\\b".toRegex()
         if (mrpPattern.containsMatchIn(text)) {
             text = text.replace(mrpPattern, "MRP")
             substitutions.add("M.R.P. -> MRP")
         }
 
-        val inclPattern = "(?i)\\b(incl\\.)\\b".toRegex()
+        val netQtyPattern = "(?i)\\b(net\\s*q[t7]y\\.?|net\\s*quant[i1]ty|nett\\s*q[t7]y)\\b".toRegex()
+        if (netQtyPattern.containsMatchIn(text)) {
+            text = text.replace(netQtyPattern, "NET QTY")
+            substitutions.add("Net Qty variants -> NET QTY")
+        }
+
+        val mfdPattern = "(?i)\\b(m\\.f\\.[dg]\\.?|mfd|mfg|pkd)\\b".toRegex()
+        if (mfdPattern.containsMatchIn(text)) {
+            text = text.replace(mfdPattern, "MFD")
+            substitutions.add("Mfd/Mfg/Pkd -> MFD")
+        }
+
+        val inclPattern = "(?i)\\b(incl\\.|incl)\\b".toRegex()
         if (inclPattern.containsMatchIn(text)) {
             text = text.replace(inclPattern, "inclusive")
             substitutions.add("incl. -> inclusive")

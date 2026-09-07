@@ -146,8 +146,27 @@ object OnDeviceAiEngine {
                     fullTextBuilder.append("\n").append(visionText.text)
                     Log.d(TAG, "OCR primary pass extracted ${visionText.text.length} chars from $uri")
 
-                    // Multi-angle crimp scan: Check 90°, 180°, and 270° for vertical dot-matrix crimp stamps
+                    // Multi-angle & contrast enhanced scan pass: Check contrast enhancement + 90°, 180°, 270° angles
                     if (bitmap != null) {
+                        try {
+                            val enhancedBmp = enhanceContrast(bitmap)
+                            val enhInput = InputImage.fromBitmap(enhancedBmp, 0)
+                            val enhText = suspendCancellableCoroutine { cont ->
+                                recognizer.process(enhInput)
+                                    .addOnSuccessListener { cont.resume(it) }
+                                    .addOnFailureListener { cont.resume(null) }
+                            }
+                            if (enhText != null && enhText.text.isNotBlank()) {
+                                for (b in enhText.textBlocks) {
+                                    scannedBlocks.add(ScannedBlockInfo(b, enhancedBmp, curImagePath))
+                                }
+                                fullTextBuilder.append("\n").append(enhText.text)
+                                Log.d(TAG, "Contrast-enhanced OCR pass extracted ${enhText.text.length} chars")
+                            }
+                        } catch (enhEx: Exception) {
+                            Log.d(TAG, "Contrast pass skipped: ${enhEx.message}")
+                        }
+
                         val rotations = listOf(90f, 180f, 270f)
                         for (angle in rotations) {
                             try {
@@ -600,6 +619,21 @@ object OnDeviceAiEngine {
             Log.e(TAG, "On-device OCR error: ${e.message}", e)
             buildFallbackFromText(context, imageUris.firstOrNull() ?: Uri.EMPTY, primaryImagePath, initialCommodity)
         }
+    }
+
+    private fun enhanceContrast(bitmap: Bitmap): Bitmap {
+        val enhanced = Bitmap.createBitmap(bitmap.width, bitmap.height, bitmap.config ?: Bitmap.Config.ARGB_8888)
+        val canvas = android.graphics.Canvas(enhanced)
+        val paint = android.graphics.Paint()
+        val cm = android.graphics.ColorMatrix(floatArrayOf(
+            1.4f, 0f, 0f, 0f, -15f,
+            0f, 1.4f, 0f, 0f, -15f,
+            0f, 0f, 1.4f, 0f, -15f,
+            0f, 0f, 0f, 1f, 0f
+        ))
+        paint.colorFilter = android.graphics.ColorMatrixColorFilter(cm)
+        canvas.drawBitmap(bitmap, 0f, 0f, paint)
+        return enhanced
     }
 
     private fun extractMrp(text: String, blocks: List<ScannedBlockInfo>): ExtractedField? {

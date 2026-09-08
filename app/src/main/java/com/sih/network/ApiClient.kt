@@ -33,6 +33,14 @@ object ApiClient {
         }
     }
 
+    private var offlineMode: Boolean = true
+
+    fun setOfflineMode(enabled: Boolean) {
+        offlineMode = enabled
+    }
+
+    fun isOfflineMode(): Boolean = offlineMode
+
     fun getBaseUrl(): String = baseUrl
 
     fun getTokenManager(): TokenManager? = tokenManager

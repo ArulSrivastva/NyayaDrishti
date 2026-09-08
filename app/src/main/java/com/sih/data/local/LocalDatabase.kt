@@ -155,9 +155,21 @@ class LocalDatabase(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME,
     // INSPECTIONS
     // =========================================================================
 
+    fun getNextInspectionId(): Int {
+        val db = readableDatabase
+        val cursor = db.rawQuery("SELECT MAX(id) FROM inspections", null)
+        var next = 1001
+        cursor.use {
+            if (it.moveToFirst() && !it.isNull(0)) {
+                next = maxOf(1001, it.getInt(0) + 1)
+            }
+        }
+        return next
+    }
+
     fun insertOrUpdateInspection(inspection: FullInspectionResponse): Long {
         val db = writableDatabase
-        val id = inspection.inspectionId ?: (System.currentTimeMillis() % 100000).toInt()
+        val id = inspection.inspectionId ?: getNextInspectionId()
         val values = ContentValues().apply {
             put("id", id)
             put("product_id", inspection.product?.id ?: id)
@@ -168,7 +180,7 @@ class LocalDatabase(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME,
             put("violation_count", inspection.violations?.size ?: 0)
             put("confidence", inspection.confidence?.overall ?: 0.85f)
             put("created_at", inspection.createdAt ?: LocalDateTime.now().toString())
-            put("json_data", gson.toJson(inspection))
+            put("json_data", gson.toJson(inspection.copy(inspectionId = id)))
         }
         val result = db.insertWithOnConflict("inspections", null, values, SQLiteDatabase.CONFLICT_REPLACE)
         Log.d(TAG, "Saved inspection #$id (${inspection.product?.name}) to local DB (row: $result)")
@@ -211,17 +223,22 @@ class LocalDatabase(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME,
         val list = mutableListOf<InspectionDetailOutDto>()
         val db = readableDatabase
         val cursor = db.rawQuery(
-            "SELECT id, product_id, product_name, status, risk_level, violation_count, confidence, created_at FROM inspections ORDER BY id DESC LIMIT ?",
+            "SELECT id, product_id, product_name, status, risk_level, violation_count, confidence, created_at, json_data FROM inspections ORDER BY id DESC LIMIT ?",
             arrayOf(limit.toString())
         )
         cursor.use {
             while (it.moveToNext()) {
                 val id = it.getInt(0)
                 val prodId = it.getInt(1)
+                val prodName = it.getString(2)
                 val status = it.getString(3)
                 val risk = it.getString(4)
                 val conf = it.getFloat(6)
                 val created = it.getString(7)
+                val json = if (it.columnCount > 8) it.getString(8) else null
+                val full = if (!json.isNullOrBlank()) {
+                    try { gson.fromJson(json, FullInspectionResponse::class.java) } catch (e: Exception) { null }
+                } else null
 
                 list.add(
                     InspectionDetailOutDto(
@@ -231,7 +248,13 @@ class LocalDatabase(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME,
                         complianceStatus = status,
                         riskLevel = risk,
                         overallConfidence = conf,
-                        createdAt = created
+                        createdAt = created,
+                        declarations = full?.declarations ?: emptyList(),
+                        violations = full?.violations ?: emptyList(),
+                        classification = full?.classification,
+                        applicableRuleSet = full?.applicableRuleSet,
+                        productName = prodName ?: full?.product?.name,
+                        product = full?.product ?: ProductDto(id = prodId, name = prodName ?: "Inspection #$id")
                     )
                 )
             }
@@ -304,9 +327,11 @@ class LocalDatabase(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME,
     // OFFICERS / AUTH
     // =========================================================================
 
-    fun authenticateOfficer(email: String): UserOutDto {
+    fun authenticateOfficer(email: String): UserOutDto? {
+        val cleanEmail = email.trim().lowercase()
+        if (cleanEmail.isBlank()) return null
         val db = readableDatabase
-        val cursor = db.rawQuery("SELECT id, email, name, role FROM officers WHERE email = ? LIMIT 1", arrayOf(email))
+        val cursor = db.rawQuery("SELECT id, email, name, role FROM officers WHERE LOWER(email) = ? LIMIT 1", arrayOf(cleanEmail))
         cursor.use {
             if (it.moveToNext()) {
                 return UserOutDto(
@@ -317,13 +342,17 @@ class LocalDatabase(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME,
                 )
             }
         }
-        // Fallback default officer
-        return UserOutDto(
-            id = 1,
-            email = email,
-            fullName = "Inspector Rajesh Sharma",
-            role = "Enforcement Officer"
-        )
+        if (cleanEmail.endsWith("@lmcs.gov.in")) {
+            val name = cleanEmail.substringBefore("@").replace(".", " ").replace("_", " ").split(" ")
+                .joinToString(" ") { part -> part.replaceFirstChar { c -> c.uppercase() } }
+            return UserOutDto(
+                id = (cleanEmail.hashCode() and 0x7FFFFFFF) % 9000 + 1000,
+                email = cleanEmail,
+                fullName = if (name.isNotBlank()) "Officer $name" else "Field Enforcement Officer",
+                role = "Enforcement Officer"
+            )
+        }
+        return null
     }
 
     // =========================================================================

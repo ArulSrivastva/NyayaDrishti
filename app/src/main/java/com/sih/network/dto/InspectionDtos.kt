@@ -156,7 +156,9 @@ data class InspectionDetailOutDto(
     @SerializedName("evidences") val evidences: List<EvidenceDto> = emptyList(),
     @SerializedName("image_quality") val imageQuality: ImageQualityResult? = null,
     @SerializedName("classification") val classification: ProductClassification? = null,
-    @SerializedName("applicable_rule_set") val applicableRuleSet: ApplicableRuleSet? = null
+    @SerializedName("applicable_rule_set") val applicableRuleSet: ApplicableRuleSet? = null,
+    @SerializedName("product_name") val productName: String? = null,
+    @SerializedName("product") val product: ProductDto? = null
 )
 
 data class DecisionRequestDto(

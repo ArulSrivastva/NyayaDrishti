@@ -67,6 +67,22 @@ object InspectionRepository {
             val updated = draft.copy(state = com.sih.model.DraftState.ABANDONED, lastUpdated = LocalDateTime.now().toString())
             saveDraft(context, updated)
         }
+        com.sih.data.local.LocalDatabase.getInstance(context).updateDraftState(inspectionId, com.sih.model.DraftState.ABANDONED, "")
+        if (currentDraft?.inspectionId == inspectionId) {
+            currentDraft = null
+        }
+    }
+
+    fun completeDraft(context: Context, inspectionId: String) {
+        val draft = getDraft(context, inspectionId)
+        if (draft != null) {
+            val updated = draft.copy(state = com.sih.model.DraftState.COMPLETED, lastUpdated = LocalDateTime.now().toString())
+            saveDraft(context, updated)
+        }
+        com.sih.data.local.LocalDatabase.getInstance(context).updateDraftState(inspectionId, com.sih.model.DraftState.COMPLETED, "")
+        if (currentDraft?.inspectionId == inspectionId) {
+            currentDraft = null
+        }
     }
 
     fun clearCurrentInspection() {
@@ -109,6 +125,29 @@ object InspectionRepository {
                 )
             } else {
                 val localToken = LocalBackendServer.login(email)
+                if (localToken != null) {
+                    ApiClient.getTokenManager()?.saveToken(localToken.accessToken)
+                    ApiClient.getTokenManager()?.saveUser(
+                        localToken.user.id,
+                        localToken.user.email,
+                        localToken.user.fullName,
+                        localToken.user.role
+                    )
+                    Result.success(
+                        User(
+                            id = localToken.user.id.toString(),
+                            name = localToken.user.fullName,
+                            department = "Legal Metrology Dept.",
+                            region = "Enforcement Zone"
+                        )
+                    )
+                } else {
+                    Result.failure(Exception("Invalid officer credentials"))
+                }
+            }
+        } catch (e: Exception) {
+            val localToken = LocalBackendServer.login(email)
+            if (localToken != null) {
                 ApiClient.getTokenManager()?.saveToken(localToken.accessToken)
                 ApiClient.getTokenManager()?.saveUser(
                     localToken.user.id,
@@ -124,24 +163,9 @@ object InspectionRepository {
                         region = "Enforcement Zone"
                     )
                 )
+            } else {
+                Result.failure(e)
             }
-        } catch (e: Exception) {
-            val localToken = LocalBackendServer.login(email)
-            ApiClient.getTokenManager()?.saveToken(localToken.accessToken)
-            ApiClient.getTokenManager()?.saveUser(
-                localToken.user.id,
-                localToken.user.email,
-                localToken.user.fullName,
-                localToken.user.role
-            )
-            Result.success(
-                User(
-                    id = localToken.user.id.toString(),
-                    name = localToken.user.fullName,
-                    department = "Legal Metrology Dept.",
-                    region = "Enforcement Zone"
-                )
-            )
         }
     }
 
@@ -167,15 +191,23 @@ object InspectionRepository {
     }
 
     suspend fun getRecentInspections(): List<Inspection> {
+        val localList = try {
+            LocalBackendServer.getDatabase().getAllInspections().map { mapToInspection(it) }
+        } catch (e: Exception) {
+            emptyList()
+        }
+
         return try {
             val response = ApiClient.getService().listInspections(skip = 0, limit = 50)
             if (response.isSuccessful && response.body() != null) {
-                response.body()!!.map { mapToInspection(it) }
+                val remoteList = response.body()!!.map { mapToInspection(it) }
+                // Merge: local inspections always take priority by ID
+                (localList + remoteList).distinctBy { it.id }.sortedByDescending { it.date }
             } else {
-                LocalBackendServer.listInspections().map { mapToInspection(it) }
+                localList
             }
         } catch (e: Exception) {
-            LocalBackendServer.listInspections().map { mapToInspection(it) }
+            localList
         }
     }
 
@@ -272,7 +304,7 @@ object InspectionRepository {
     }
 
     fun mapToInspection(dto: InspectionDetailOutDto): Inspection {
-        val status = when (dto.complianceStatus?.uppercase()) {
+        val status = when (dto.complianceStatus?.uppercase() ?: dto.status?.uppercase()) {
             "PASS", "COMPLIANT" -> ComplianceStatus.COMPLIANT
             "FAIL", "NON_COMPLIANT" -> ComplianceStatus.NON_COMPLIANT
             else -> ComplianceStatus.NEEDS_REVIEW
@@ -283,14 +315,16 @@ object InspectionRepository {
             else -> RiskLevel.LOW
         }
         val date = parseDate(dto.createdAt)
+        val name = dto.productName ?: dto.product?.name ?: "Inspection #${dto.id}"
+        val vCount = if (dto.violations.isNotEmpty()) dto.violations.size else 0
         return Inspection(
             id = dto.id.toString(),
-            productName = "Product #${dto.productId ?: dto.id}",
+            productName = name,
             date = date,
             status = status,
-            violationCount = dto.violations.size,
+            violationCount = vCount,
             riskLevel = risk,
-            productId = (dto.productId ?: 1).toString()
+            productId = (dto.productId ?: dto.id).toString()
         )
     }
 

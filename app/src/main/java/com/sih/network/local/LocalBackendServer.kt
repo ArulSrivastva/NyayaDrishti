@@ -35,9 +35,9 @@ object LocalBackendServer {
         return localDb ?: throw IllegalStateException("LocalBackendServer not started. Call LocalBackendServer.start(context).")
     }
 
-    fun login(email: String): TokenResponseDto {
+    fun login(email: String): TokenResponseDto? {
         val db = getDatabase()
-        val user = db.authenticateOfficer(email)
+        val user = db.authenticateOfficer(email) ?: return null
         val token = "local_jwt_" + UUID.randomUUID().toString().replace("-", "")
         return TokenResponseDto(
             accessToken = token,

@@ -13,7 +13,7 @@ import okhttp3.Response
 import okhttp3.ResponseBody.Companion.toResponseBody
 import okio.Buffer
 
-class LocalBackendInterceptor(context: Context) : Interceptor {
+class LocalBackendInterceptor(private val context: Context) : Interceptor {
 
     private val gson = Gson()
     private val TAG = "LocalBackendInterceptor"
@@ -26,6 +26,21 @@ class LocalBackendInterceptor(context: Context) : Interceptor {
         val request = chain.request()
         val path = request.url.encodedPath.trimStart('/')
         val method = request.method
+        val host = request.url.host
+
+        // Check if online mode is active and target is not localhost
+        val isRemoteTarget = host != "localhost" && host != "127.0.0.1" && !com.sih.network.ApiClient.isOfflineMode()
+        if (isRemoteTarget) {
+            try {
+                val remoteResp = chain.proceed(request)
+                if (remoteResp.isSuccessful || remoteResp.code == 401 || remoteResp.code == 403 || remoteResp.code == 422) {
+                    return remoteResp
+                }
+                Log.w(TAG, "Remote server returned ${remoteResp.code}, falling back to on-device autonomous mode")
+            } catch (e: Exception) {
+                Log.w(TAG, "Remote server unreachable (${e.message}), falling back to on-device autonomous mode")
+            }
+        }
 
         Log.d(TAG, "Intercepting API request on-device: $method /$path")
 
@@ -33,8 +48,7 @@ class LocalBackendInterceptor(context: Context) : Interceptor {
             handleLocalRequest(request, path, method)
         } catch (e: Exception) {
             Log.e(TAG, "Error handling local request for /$path", e)
-            // Fallback response with empty JSON to prevent app crashes
-            createJsonResponse(request, 200, "{}")
+            createJsonResponse(request, 500, "{\"error\": \"Local processing failed: ${e.message}\"}")
         }
     }
 
@@ -46,15 +60,27 @@ class LocalBackendInterceptor(context: Context) : Interceptor {
                 val reqDto = gson.fromJson(bodyStr, LoginRequestDto::class.java)
                 reqDto.email
             } catch (e: Exception) {
-                "inspector@lmcs.gov.in"
+                ""
             }
             val tokenDto = LocalBackendServer.login(email)
-            return createJsonResponse(request, 200, gson.toJson(tokenDto))
+            return if (tokenDto != null) {
+                createJsonResponse(request, 200, gson.toJson(tokenDto))
+            } else {
+                createJsonResponse(request, 401, "{\"error\": \"Invalid officer credentials\"}")
+            }
         }
 
         // 2. AUTH: ME
         if (path.endsWith("auth/me") && method == "GET") {
-            val user = LocalBackendServer.getDatabase().authenticateOfficer("inspector@lmcs.gov.in")
+            val tokenManager = com.sih.network.TokenManager(context)
+            val currentEmail = tokenManager.getUserEmail()
+            val user = LocalBackendServer.getDatabase().authenticateOfficer(currentEmail)
+                ?: com.sih.network.dto.UserOutDto(
+                    id = tokenManager.getUserId(),
+                    email = currentEmail,
+                    fullName = tokenManager.getUserName(),
+                    role = tokenManager.getUserRole()
+                )
             return createJsonResponse(request, 200, gson.toJson(user))
         }
 

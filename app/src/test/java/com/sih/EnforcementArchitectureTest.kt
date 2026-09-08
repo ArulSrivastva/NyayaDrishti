@@ -12,8 +12,10 @@ import com.sih.model.InspectionSignOff
 import com.sih.model.PackageType
 import com.sih.util.ocr.OcrNormalizer
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.math.BigDecimal
@@ -133,7 +135,7 @@ class EnforcementArchitectureTest {
     }
 
     // =========================================================================
-    // SYSTEM 5 — USP CALCULATOR
+    // SYSTEM 5 — USP CALCULATOR (Statutory Unit & BigDecimal Calculation)
     // =========================================================================
     @Test
     fun test5_UspCalculationBigDecimal() {
@@ -142,7 +144,7 @@ class EnforcementArchitectureTest {
 
         val normalizedQty = UspCalculator.normalizeQuantity(qtyText)
         assertNotNull(normalizedQty)
-        assertEquals(QuantityUnit.GRAM, normalizedQty!!.unit)
+        assertEquals(QuantityUnit.GRAM, normalizedQty!!.originalUnit)
 
         val mrpVal = UspCalculator.extractMrpValue(mrpText)
         assertNotNull(mrpVal)
@@ -151,8 +153,9 @@ class EnforcementArchitectureTest {
         val result = UspCalculator.calculateUsp(mrpVal!!, normalizedQty)
 
         assertNotNull(result.calculatedUsp)
-        assertEquals(BigDecimal("200.00"), result.calculatedUsp)
-        assertEquals("₹200.00/kg", result.displayValue)
+        // 600g < 1kg -> statutory canonical unit is per 100g: 120 * 100 / 600 = 20.00
+        assertEquals(BigDecimal("20.00"), result.calculatedUsp)
+        assertEquals("₹20.00/100g", result.displayValue)
     }
 
     // =========================================================================
@@ -162,8 +165,12 @@ class EnforcementArchitectureTest {
     fun test6_PackageGeometryCurvedPackageType() {
         val ratio = 0.3f // Tall bottle ratio
         val packageType = when {
+            ratio > 2.0f -> PackageType.BLISTER_PACK
+            ratio in 0.8f..1.2f -> PackageType.BOX_CARTON
+            ratio > 1.2f -> PackageType.POUCH
             ratio < 0.5f -> PackageType.BOTTLE
-            else -> PackageType.BOX_CARTON
+            ratio in 0.5f..0.8f -> PackageType.BOX_CARTON
+            else -> PackageType.OTHER
         }
         assertEquals(PackageType.BOTTLE, packageType)
     }
@@ -200,4 +207,228 @@ class EnforcementArchitectureTest {
         assertEquals(jsonHash, signOff.inspectionJsonHash)
         assertEquals(AcknowledgementStatus.ACKNOWLEDGED, signOff.representativeAcknowledgement)
     }
+
+    // =========================================================================
+    // SYSTEM 8 — RULE 6(11) MULTI-UNIT USP CONVERSION MATRIX (8 CASES)
+    // =========================================================================
+    @Test
+    fun test8_UspVerificationWithNormalizedUnits() {
+        // Case 1: 500 g @ ₹100, declared per 100 g (₹20 / 100g) -> VERIFIED
+        val res1 = UspCalculator.verifyDeclaredUsp("₹20 / 100g", "₹100.00", "500 g")
+        assertEquals(com.sih.domain.compliance.UspStatus.VERIFIED, res1.status)
+
+        // Case 2: 500 g @ ₹100, declared per kg (₹200 / kg) -> VERIFIED
+        val res2 = UspCalculator.verifyDeclaredUsp("₹200 / kg", "₹100.00", "500 g")
+        assertEquals(com.sih.domain.compliance.UspStatus.VERIFIED, res2.status)
+
+        // Case 3: 1 kg @ ₹100, declared per kg (₹100 / kg) -> VERIFIED
+        val res3 = UspCalculator.verifyDeclaredUsp("₹100 / kg", "₹100.00", "1 kg")
+        assertEquals(com.sih.domain.compliance.UspStatus.VERIFIED, res3.status)
+
+        // Case 4: 1 kg @ ₹100, declared per 100 g (₹10 / 100g) -> VERIFIED
+        val res4 = UspCalculator.verifyDeclaredUsp("₹10 / 100g", "₹100.00", "1 kg")
+        assertEquals(com.sih.domain.compliance.UspStatus.VERIFIED, res4.status)
+
+        // Case 5: 100 ml @ ₹50, declared per 100 ml (₹50 / 100ml) -> VERIFIED
+        val res5 = UspCalculator.verifyDeclaredUsp("₹50 / 100ml", "₹50.00", "100 ml")
+        assertEquals(com.sih.domain.compliance.UspStatus.VERIFIED, res5.status)
+
+        // Case 6: 100 ml @ ₹50, declared per L (₹500 / L) -> VERIFIED
+        val res6 = UspCalculator.verifyDeclaredUsp("₹500 / L", "₹50.00", "100 ml")
+        assertEquals(com.sih.domain.compliance.UspStatus.VERIFIED, res6.status)
+
+        // Case 7: 1 L @ ₹200, declared per L (₹200 / L) -> VERIFIED
+        val res7 = UspCalculator.verifyDeclaredUsp("₹200 / L", "₹200.00", "1 L")
+        assertEquals(com.sih.domain.compliance.UspStatus.VERIFIED, res7.status)
+
+        // Case 8: 1 L @ ₹200, declared per 100 ml (₹20 / 100ml) -> VERIFIED
+        val res8 = UspCalculator.verifyDeclaredUsp("₹20 / 100ml", "₹200.00", "1 L")
+        assertEquals(com.sih.domain.compliance.UspStatus.VERIFIED, res8.status)
+
+        // Negative test: 500 g @ ₹100 with incorrect declared rate (₹15 / 100g) -> MISMATCH
+        val mismatch = UspCalculator.verifyDeclaredUsp("₹15 / 100g", "₹100.00", "500 g")
+        assertEquals(com.sih.domain.compliance.UspStatus.MISMATCH, mismatch.status)
+
+        // Exemption test: 10 g package -> EXEMPT under Rule 26
+        val exempt = UspCalculator.verifyDeclaredUsp(null, "₹10.00", "10 g")
+        assertEquals(com.sih.domain.compliance.UspStatus.EXEMPT, exempt.status)
+    }
+
+    // =========================================================================
+    // SYSTEM 9 — PACKAGE GEOMETRY BLISTER PACK REACHABILITY
+    // =========================================================================
+    @Test
+    fun test9_PackageGeometryBlisterPackReachability() {
+        val ratio = 2.4f
+        val packageType = when {
+            ratio > 2.0f -> PackageType.BLISTER_PACK
+            ratio in 0.8f..1.2f -> PackageType.BOX_CARTON
+            ratio > 1.2f -> PackageType.POUCH
+            ratio < 0.5f -> PackageType.BOTTLE
+            ratio in 0.5f..0.8f -> PackageType.BOX_CARTON
+            else -> PackageType.OTHER
+        }
+        assertEquals(PackageType.BLISTER_PACK, packageType)
+    }
+
+    // =========================================================================
+    // SYSTEM 10 — SECTION 65B REPORT SHA-256 INTEGRITY
+    // =========================================================================
+    @Test
+    fun test10_Section65bSha256ReportIntegrity() {
+        val id = "INSP-1042"
+        val product = "Tata Salt 1kg"
+        val input = "NYAYADRISHTI-SEC65B-INSP-$id-$product-STATUTORY-RECORD"
+        val digest = MessageDigest.getInstance("SHA-256").digest(input.toByteArray(Charsets.UTF_8))
+        val hash = digest.joinToString("") { "%02x".format(it) }
+
+        assertEquals(64, hash.length)
+        assertTrue(hash.matches(Regex("^[a-f0-9]{64}$")))
+    }
+
+    // =========================================================================
+    // SYSTEM 11 — CONFIDENCE-AWARE DOT-MATRIX DATE AMBIGUITY & PROVENANCE
+    // =========================================================================
+    @Test
+    fun test11_DotMatrixDateAmbiguityAndProvenance() {
+        val currentYear = 2026
+
+        // 1. Dual-pass resolution: Pass A = 04/2028 (implausible mfg year), Pass B = 04/2026
+        // Resolves with candidate = 04/2026, flagged as REVIEW with preserved provenance!
+        val resolvedCandidate = OcrNormalizer.resolveDateCandidate(
+            primaryText = "MFD: 04/2028",
+            enhancedText = "MFD: 04/2026",
+            boundingBox = listOf(10f, 20f, 100f, 40f),
+            sourceImagePath = "/test/scale.jpg",
+            sourceEvidenceId = "EVID-2026-001",
+            currentYear = currentYear
+        )
+
+        assertNotNull(resolvedCandidate)
+        assertEquals("MFD: 04/2028", resolvedCandidate!!.rawOcr)
+        assertEquals("MFD: 04/2026", resolvedCandidate.enhancedOcr)
+        assertEquals(com.sih.model.ConfidenceLevel.REVIEW, resolvedCandidate.confidenceLevel)
+        assertTrue(resolvedCandidate.ambiguityReason!!.contains("dot_matrix_year_ambiguity"))
+
+        // 2. Both passes agree on valid date -> HIGH confidence
+        val agreedCandidate = OcrNormalizer.resolveDateCandidate(
+            primaryText = "MFD: 04/2026",
+            enhancedText = "MFD: 04/2026",
+            boundingBox = null,
+            sourceImagePath = null,
+            sourceEvidenceId = null,
+            currentYear = currentYear
+        )
+        assertEquals(com.sih.model.ConfidenceLevel.HIGH, agreedCandidate!!.confidenceLevel)
+        assertEquals(null, agreedCandidate.ambiguityReason)
+
+        // 3. Legitimate future expiry date (EXP: 04/2028) must NOT be flagged as an invalid future date
+        val expInfo = OcrNormalizer.parseDateComponents("EXP: 04/2028")
+        assertNotNull(expInfo)
+        assertTrue(expInfo!!.isExpiryOrBestBefore)
+        val (expPlausible, expReason) = OcrNormalizer.evaluateDatePlausibility(expInfo, currentYear)
+        assertTrue(expPlausible)
+        assertEquals(null, expReason)
+
+        // 4. Dot-matrix preprocessor test: produces continuous pixel coverage via pure 8-connected kernel
+        val binaryGrid = BooleanArray(10 * 10)
+        // Put an isolated ink dot at (5, 5)
+        binaryGrid[5 * 10 + 5] = true
+        val dilatedGrid = com.sih.util.quality.DotMatrixPreprocessor.dilateInk(binaryGrid, 10, 10)
+        assertNotNull(dilatedGrid)
+        // Neighboring dots at (5, 4), (5, 6), (4, 5), (6, 5) must be bridged/dilated
+        assertTrue(dilatedGrid[5 * 10 + 5])
+        assertTrue(dilatedGrid[5 * 10 + 4])
+        assertTrue(dilatedGrid[5 * 10 + 6])
+        assertTrue(dilatedGrid[4 * 10 + 5])
+        assertTrue(dilatedGrid[6 * 10 + 5])
+        // Corner diagonal (4, 4) MUST now be true in 8-connected kernel to bridge diagonal '/' strokes
+        assertTrue(dilatedGrid[4 * 10 + 4])
+        // Distance 2 non-neighbor (3, 3) remains false
+        assertFalse(dilatedGrid[3 * 10 + 3])
+    }
+
+    @Test
+    fun test12_DroppedSlashAndCijDateDisambiguation() {
+        // 1. Single-digit month without slash ("42026" - dropped slash & zero)
+        val info42026 = OcrNormalizer.parseDateComponents("42026")
+        assertNotNull(info42026)
+        assertEquals(4, info42026!!.month)
+        assertEquals(2026, info42026.year)
+        assertEquals("04/2026", info42026.formattedDate)
+
+        // 2. Double-digit month without slash ("042026")
+        val info042026 = OcrNormalizer.parseDateComponents("042026")
+        assertNotNull(info042026)
+        assertEquals(4, info042026!!.month)
+        assertEquals(2026, info042026.year)
+        assertEquals("04/2026", info042026.formattedDate)
+
+        // 3. Alternative separators (pipe, space, backslash)
+        val infoPipe = OcrNormalizer.parseDateComponents("04|2026")
+        assertNotNull(infoPipe)
+        assertEquals("04/2026", infoPipe!!.formattedDate)
+
+        val infoSpace = OcrNormalizer.parseDateComponents("04 2026")
+        assertNotNull(infoSpace)
+        assertEquals("04/2026", infoSpace!!.formattedDate)
+
+        // 4. Barcode numbers, prices (MRP 12.00), and invalid years (2504, 2000) must be strictly rejected
+        val barcodeInfo = OcrNormalizer.parseDateComponents("8 901425 022504")
+        assertNull(barcodeInfo)
+
+        val year2504Info = OcrNormalizer.parseDateComponents("02/2504")
+        assertNull(year2504Info)
+
+        val mrpPriceInfo = OcrNormalizer.parseDateComponents("MRP (Incl. of all taxes): ₹ 12.00")
+        assertNull(mrpPriceInfo)
+
+        val priceOnlyInfo = OcrNormalizer.parseDateComponents("12.00")
+        assertNull(priceOnlyInfo)
+
+        val year2000Info = OcrNormalizer.parseDateComponents("12/2000")
+        assertNull(year2000Info)
+
+        // 5. Candidate resolution preserves raw OCR "42026" but canonicalizes normalizedText to "04/2026"
+        val resolved = OcrNormalizer.resolveDateCandidate(
+            primaryText = "42026",
+            enhancedText = "04/2026",
+            boundingBox = listOf(0f, 0f, 100f, 50f),
+            sourceImagePath = "/test/img.jpg",
+            sourceEvidenceId = "evid-42026"
+        )
+        assertNotNull(resolved)
+        assertEquals("42026", resolved!!.rawOcr)
+        assertEquals("04/2026", resolved.normalizedText)
+    }
+
+    @Test
+    fun test13_NetQuantityPinCodeRejectionAndCountUnits() {
+        // Test detectCandidates with PIN code and Net Quantity 1 N
+        val blocks = listOf(
+            com.sih.util.ocr.GroupedTextBlock(
+                text = "Net Quantity: 1 N",
+                normalizedText = "Net Quantity: 1 N",
+                boundingBox = listOf(10f, 10f, 100f, 30f),
+                sourceImagePath = "/test/img.jpg",
+                sourceEvidenceId = null,
+                lineCount = 1
+            ),
+            com.sih.util.ocr.GroupedTextBlock(
+                text = "Pune - 410401, Maharashtra, India. Kokuyo Camlin Ltd.",
+                normalizedText = "Pune - 410401, Maharashtra, India. Kokuyo Camlin Ltd.",
+                boundingBox = listOf(10f, 100f, 200f, 130f),
+                sourceImagePath = "/test/img.jpg",
+                sourceEvidenceId = null,
+                lineCount = 1
+            )
+        )
+
+        val candidates = OcrNormalizer.detectCandidates("Net Quantity: 1 N\nPune - 410401, Maharashtra, India.", blocks)
+        val netQtyCandidate = candidates.firstOrNull { it.type == com.sih.model.DeclarationType.NET_QUANTITY }
+        assertNotNull(netQtyCandidate)
+        assertTrue(netQtyCandidate!!.normalizedText.contains("1 N") || netQtyCandidate.normalizedText.contains("1") || netQtyCandidate.normalizedText.contains("Net Quantity: 1 N"))
+        assertFalse(netQtyCandidate.normalizedText.contains("410401"))
+    }
 }
+

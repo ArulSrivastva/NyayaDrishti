@@ -52,12 +52,17 @@ object ImageQualityAnalyzer {
                 )
             }
 
-            return@withContext analyzeBitmap(bitmap, origWidth, origHeight)
+            try {
+                return@withContext analyzeBitmap(bitmap, origWidth, origHeight)
+            } finally {
+                bitmap.recycle()
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Error analyzing image quality for $imageUri", e)
             return@withContext ImageQualityResult(
-                qualityScore = 0.85f,
-                overallStatus = QualityStatus.ACCEPT
+                qualityScore = 0.50f,
+                overallStatus = QualityStatus.WARNING,
+                rejectionReason = "Image quality could not be automatically validated (${e.message ?: "Unknown error"}). Manual review required."
             )
         }
     }

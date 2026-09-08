@@ -39,5 +39,8 @@ data class DeclarationCandidate(
     val confidenceLevel: ConfidenceLevel,
     val boundingBox: List<Float>?,
     val sourceEvidenceId: String?,
-    val sourceImagePath: String?
+    val sourceImagePath: String?,
+    val rawOcr: String? = null,
+    val enhancedOcr: String? = null,
+    val ambiguityReason: String? = null
 )

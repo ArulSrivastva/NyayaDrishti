@@ -155,24 +155,30 @@ object ProductClassifier {
         }
 
         // 4. Quantity Type (NEVER default to MASS_WEIGHT without evidence!)
+        val isLiquid = Regex("""\b(?:ml|mls|millilitres?|milliliters?|l|ltr|ltrs|litres?|liters?)\b""", RegexOption.IGNORE_CASE).containsMatchIn(lowerNetQty)
+        val isMass = Regex("""\b(?:g|gm|gms|grams?|kg|kgs|kilograms?)\b""", RegexOption.IGNORE_CASE).containsMatchIn(lowerNetQty)
+        val isLength = Regex("""\b(?:cm|mm|m|meters?|metres?)\b""", RegexOption.IGNORE_CASE).containsMatchIn(lowerNetQty)
+        val isArea = Regex("""\b(?:sq\.?\s*(?:m|cm|mm|ft)|square)\b""", RegexOption.IGNORE_CASE).containsMatchIn(lowerNetQty)
+        val isCount = Regex("""\b(?:u|units?|n|nos?|pieces?|pcs?|count|sheets?|pages?)\b""", RegexOption.IGNORE_CASE).containsMatchIn(lowerNetQty)
+
         val quantityType: QuantityType = when {
-            lowerNetQty.contains("ml") || lowerNetQty.contains("litre") || lowerNetQty.contains("liter") || lowerNetQty.endsWith("l") -> {
+            isLiquid -> {
                 signals.add("Liquid volume unit detected ($detectedNetQuantity) -> VOLUME_LIQUID")
                 QuantityType.VOLUME_LIQUID
             }
-            lowerNetQty.contains("kg") || lowerNetQty.contains("gm") || lowerNetQty.contains("gram") || lowerNetQty.contains("g") -> {
+            isMass -> {
                 signals.add("Mass/weight unit detected ($detectedNetQuantity) -> MASS_WEIGHT")
                 QuantityType.MASS_WEIGHT
             }
-            lowerNetQty.contains("cm") || lowerNetQty.contains("mm") || lowerNetQty.contains("meter") || lowerNetQty.contains("m") -> {
+            isLength -> {
                 signals.add("Linear length unit detected -> LENGTH")
                 QuantityType.LENGTH
             }
-            lowerNetQty.contains("sq") -> {
+            isArea -> {
                 signals.add("Area unit detected -> AREA")
                 QuantityType.AREA
             }
-            lowerNetQty.contains(" u") || lowerNetQty.contains(" n") || lowerNetQty.contains("piece") || lowerNetQty.contains("count") -> {
+            isCount -> {
                 signals.add("Unit count detected -> COUNT_NUMBER")
                 QuantityType.COUNT_NUMBER
             }

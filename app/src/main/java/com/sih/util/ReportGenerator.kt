@@ -161,7 +161,8 @@ object ReportGenerator {
         inspection: FullInspectionResponse?,
         inspectionId: String
     ): File? {
-        val file = File(context.cacheDir, "Inspection_Report_$inspectionId.pdf")
+        val reportsDir = File(context.filesDir, "reports").apply { if (!exists()) mkdirs() }
+        val file = File(reportsDir, "Inspection_Report_$inspectionId.pdf")
         return try {
             if (file.exists()) file.delete()
             FileOutputStream(file).use { outputStream ->
@@ -602,9 +603,9 @@ object ReportGenerator {
         val auditRows = listOf(
             AuditRow("Commodity Name", commodityVal, "Rule 6(1)(a)", isCommodityPresent),
             AuditRow("Manufacturer / Packer", manufacturerVal, "Rule 6(1)(b)", isMfgPresent),
-            AuditRow("Month & Year of Mfg/Pkg", dateVal, "Rule 6(1)(d)", isDatePresent),
-            AuditRow("Retail Sale Price (MRP)", mrpVal, "Rule 6(1)(e)", isMrpPresent),
-            AuditRow("Net Quantity", netQuantityVal, "Rule 6(1)(f)", isQtyPresent),
+            AuditRow("Net Quantity", netQuantityVal, "Rule 6(1)(d)", isQtyPresent),
+            AuditRow("Month & Year of Mfg/Pkg", dateVal, "Rule 6(1)(e)", isDatePresent),
+            AuditRow("Retail Sale Price (MRP)", mrpVal, "Rule 6(1)(f)", isMrpPresent),
             AuditRow("Consumer Care Contact", consumerCareVal, "Rule 6(1)(g)", isCarePresent)
         )
 
@@ -997,12 +998,12 @@ object ReportGenerator {
     }
 
     private fun generateHash(id: String, productName: String?): String {
-        val input = "$id-${productName ?: "PackagedCommodity"}-LMCS"
+        val input = "NYAYADRISHTI-SEC65B-INSP-$id-${productName ?: "PackagedCommodity"}-STATUTORY-RECORD"
         return try {
-            val bytes = MessageDigest.getInstance("MD5").digest(input.toByteArray())
-            bytes.take(4).joinToString("") { "%02X".format(it) }
+            val bytes = MessageDigest.getInstance("SHA-256").digest(input.toByteArray(Charsets.UTF_8))
+            bytes.joinToString("") { "%02x".format(it) }
         } catch (e: Exception) {
-            "9A4B-71E0"
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         }
     }
 }

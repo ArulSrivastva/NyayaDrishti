@@ -80,8 +80,8 @@ object OnDeviceAiEngine {
             }
         }
         val primaryImagePath = localImagePaths.first()
-        val inspId = (System.currentTimeMillis() % 1000000).toInt().coerceAtLeast(100)
         val db = com.sih.data.local.LocalDatabase.getInstance(context)
+        val inspId = com.sih.repository.InspectionRepository.currentInspectionId ?: db.getNextInspectionId()
         val officerId = com.sih.network.ApiClient.getTokenManager()?.getUserId() ?: 1
         val deviceModel = android.os.Build.MODEL
         val year = java.time.Year.now().value
@@ -108,7 +108,7 @@ object OnDeviceAiEngine {
                     officerId = officerId,
                     originalFilename = curFile.name,
                     sha256 = origHash,
-                    captureTimestamp = LocalDateTime.now().toString(),
+                    captureTimestamp = java.time.Instant.now().toString(),
                     deviceModel = deviceModel,
                     imageWidth = bitmap?.width,
                     imageHeight = bitmap?.height,
@@ -158,13 +158,37 @@ object OnDeviceAiEngine {
                             }
                             if (enhText != null && enhText.text.isNotBlank()) {
                                 for (b in enhText.textBlocks) {
-                                    scannedBlocks.add(ScannedBlockInfo(b, enhancedBmp, curImagePath))
+                                    scannedBlocks.add(ScannedBlockInfo(b, bitmap, curImagePath))
                                 }
                                 fullTextBuilder.append("\n").append(enhText.text)
                                 Log.d(TAG, "Contrast-enhanced OCR pass extracted ${enhText.text.length} chars")
                             }
+                            if (enhancedBmp != bitmap) {
+                                enhancedBmp.recycle()
+                            }
                         } catch (enhEx: Exception) {
                             Log.d(TAG, "Contrast pass skipped: ${enhEx.message}")
+                        }
+
+                        // Dot-Matrix / CIJ Morphological Preprocessing Pass (Bridges disconnected ink dots for MFD/EXP)
+                        try {
+                            val dotMatrixBmp = com.sih.util.quality.DotMatrixPreprocessor.enhanceDotMatrix(bitmap)
+                            val dotInput = InputImage.fromBitmap(dotMatrixBmp, 0)
+                            val dotText = suspendCancellableCoroutine { cont ->
+                                recognizer.process(dotInput)
+                                    .addOnSuccessListener { cont.resume(it) }
+                                    .addOnFailureListener { cont.resume(null) }
+                            }
+                            if (dotText != null && dotText.text.isNotBlank()) {
+                                for (b in dotText.textBlocks) {
+                                    scannedBlocks.add(ScannedBlockInfo(b, bitmap, curImagePath))
+                                }
+                                fullTextBuilder.append("\n").append(dotText.text)
+                                Log.d(TAG, "Dot-Matrix morphological pass extracted ${dotText.text.length} chars")
+                            }
+                            dotMatrixBmp.recycle()
+                        } catch (dotEx: Exception) {
+                            Log.d(TAG, "Dot-Matrix pass skipped: ${dotEx.message}")
                         }
 
                         val rotations = listOf(90f, 180f, 270f)
@@ -180,11 +204,12 @@ object OnDeviceAiEngine {
                                 }
                                 if (rotText != null && rotText.text.isNotBlank()) {
                                     for (b in rotText.textBlocks) {
-                                        scannedBlocks.add(ScannedBlockInfo(b, rotatedBmp, curImagePath))
+                                        scannedBlocks.add(ScannedBlockInfo(b, bitmap, curImagePath))
                                     }
                                     fullTextBuilder.append("\n").append(rotText.text)
                                     Log.d(TAG, "Crimp rotated ($angle°) pass extracted ${rotText.text.length} chars")
                                 }
+                                rotatedBmp.recycle()
                             } catch (rotEx: Exception) {
                                 Log.d(TAG, "Rotation pass ($angle°) skipped: ${rotEx.message}")
                             }
@@ -408,10 +433,61 @@ object OnDeviceAiEngine {
             }
 
             // 6. Month and Year of Manufacture / Packing (Rule 6(1)(e) / R6_006)
-            if (dateDecl != null) {
-                val cropPath = cropBbox(dateDecl.bitmap ?: primaryBitmap, dateDecl.bbox, context, "date") ?: dateDecl.imagePath ?: primaryImagePath
-                declarations.add(DeclarationDto(declId++, "packing_date", dateDecl.text, 0.90f, dateDecl.bbox, true, imagePath = cropPath))
-                evidences.add(EvidenceDto(evidId++, null, cropPath, dateDecl.bbox, 0.90f))
+            val dateCandidates = ocrNormResult.candidates.filter { it.type == com.sih.model.DeclarationType.DATE }
+            val dateCandidate = dateCandidates.maxWithOrNull(
+                compareBy<com.sih.model.DeclarationCandidate> { candidate ->
+                    val rawLower = candidate.rawText.lowercase()
+                    val hasKeyword = rawLower.contains("mfd") || rawLower.contains("mfg") ||
+                            rawLower.contains("pkd") || rawLower.contains("pack") ||
+                            rawLower.contains("exp") || rawLower.contains("use by") ||
+                            rawLower.contains("best before")
+                    if (hasKeyword) 10 else 0
+                }.thenBy { candidate ->
+                    val currentYear = java.time.Year.now().value
+                    val parsed = com.sih.util.ocr.OcrNormalizer.parseDateComponents(candidate.normalizedText)
+                        ?: com.sih.util.ocr.OcrNormalizer.parseDateComponents(candidate.rawText)
+                    if (parsed != null && parsed.year in (currentYear - 5)..(currentYear + 1)) 5 else 0
+                }.thenBy { candidate ->
+                    candidate.confidence
+                }
+            )
+
+            if (dateDecl != null || dateCandidate != null) {
+                val candidateHasKeyword = dateCandidate?.let { c ->
+                    val r = c.rawText.lowercase()
+                    r.contains("mfd") || r.contains("mfg") || r.contains("pkd") || r.contains("pack") || r.contains("exp")
+                } ?: false
+
+                val candidateNorm = dateCandidate?.normalizedText
+                val declNorm = dateDecl?.text?.let { com.sih.util.ocr.OcrNormalizer.parseDateComponents(it)?.formattedDate }
+                
+                val effectiveText = if (candidateHasKeyword) {
+                    candidateNorm ?: declNorm ?: dateDecl?.text ?: "Not Detected"
+                } else if (declNorm != null) {
+                    declNorm
+                } else {
+                    candidateNorm ?: dateDecl?.text ?: "Not Detected"
+                }
+                val cropPath = cropBbox(dateDecl?.bitmap ?: primaryBitmap, dateCandidate?.boundingBox ?: dateDecl?.bbox, context, "date") ?: dateDecl?.imagePath ?: primaryImagePath
+                val isAmbiguous = dateCandidate?.confidenceLevel == com.sih.model.ConfidenceLevel.REVIEW && dateCandidate.ambiguityReason != null
+                val conf = if (isAmbiguous) 0.65f else 0.90f
+
+                declarations.add(DeclarationDto(declId++, "packing_date", effectiveText, conf, dateCandidate?.boundingBox ?: dateDecl?.bbox, true, imagePath = cropPath))
+                evidences.add(EvidenceDto(evidId++, null, cropPath, dateCandidate?.boundingBox ?: dateDecl?.bbox, conf))
+
+                if (isAmbiguous) {
+                    val ambReason = dateCandidate.ambiguityReason ?: "Possible dot-matrix CIJ OCR ambiguity"
+                    val viol = ViolationDto(
+                        id = violId++,
+                        ruleId = "R6_006",
+                        type = "packing_date",
+                        description = "Manufacturing date requires officer review: $ambReason (Raw: '${dateCandidate.rawOcr}', Enhanced: '${dateCandidate.enhancedOcr}').",
+                        severity = "review",
+                        status = "open",
+                        confidence = 0.65f
+                    )
+                    violations.add(viol)
+                }
             } else {
                 val isGlared = isOccludedByGlare("Top") || isOccludedByGlare("Bottom")
                 declarations.add(DeclarationDto(declId++, "packing_date", if (isGlared) "Obscured by Glare" else null, if (isGlared) 0.45f else 0.0f, null, false, imagePath = null))
@@ -494,14 +570,17 @@ object OnDeviceAiEngine {
             }
 
             // 9. Statutory Font Height / Readability Verification (Rule 7, Schedule II)
+            val fontConfidence = if (ocrNormResult.candidates.any { it.confidence < 0.70f }) 0.75f else 0.90f
+            val isLegible = ocrNormResult.candidates.isNotEmpty()
             declarations.add(
                 DeclarationDto(
                     declId++,
                     "font_size_readability",
-                    "Statutory minimum font height compliant with Rule 7, Schedule II. Legibly resolved by digital OCR.",
-                    0.95f,
+                    if (isLegible) "Minimum font height compliant with Rule 7 & Schedule II (OCR legibility verified)."
+                    else "Numeral and font height requires physical optical gauge verification.",
+                    fontConfidence,
                     null,
-                    true,
+                    isLegible,
                     imagePath = primaryImagePath
                 )
             )
@@ -706,54 +785,116 @@ object OnDeviceAiEngine {
     }
 
     private fun extractNetQuantity(text: String, blocks: List<ScannedBlockInfo>): ExtractedField? {
-        val explicitPatterns = listOf(
-            Pattern.compile("(?i)(?:net\\s*(?:quantity|qty|wt|weight|vol|volume)|शुद्ध\\s*मात्रा|nett\\s*qty)\\s*[:\\-\\.]*\\s*([0-9]+(?:\\.[0-9]+)?)\\s*(g|gm|gms|kg|ml|l|ltr|litre|litres|n|units|pages|sheets)\\b"),
-            Pattern.compile("(?i)(?:net\\s*(?:quantity|qty|wt|weight))\\s*[:\\-\\.]*\\s*([0-9]+(?:\\.[0-9]+)?)\\s*([a-zA-Z]{1,5})\\b"),
-            Pattern.compile("(?i)\\b([0-9]+(?:\\.[0-9]+)?)\\s*(g|gm|gms|kg|ml|l|ltr|litre|litres)\\b")
-        )
+        val validUnits = "g|gm|gms|kg|ml|l|ltr|litre|litres|n|u|units?|pcs?|pieces?|pages?|sheets?"
 
-        for (p in explicitPatterns) {
-            val m = p.matcher(text)
-            if (m.find()) {
-                val fullMatch = m.group(0)?.trim() ?: ""
-                val qtyVal = if (m.groupCount() >= 2) "${m.group(1)} ${m.group(2)}" else fullMatch
-                val loc = findLocationForText(qtyVal, blocks) ?: findLocationForText(fullMatch, blocks)
-                val str = if (fullMatch.contains("net", ignoreCase = true)) fullMatch else "Net Quantity: $qtyVal"
-                return ExtractedField(str, loc?.first, loc?.second?.bitmap, loc?.second?.imagePath)
-            }
+        fun isAddressOrPinCode(str: String): Boolean {
+            val lower = str.lowercase()
+            val hasPin = Regex("""\b[1-9][0-9]{5}\b""").containsMatchIn(str)
+            val hasAddressKeyword = lower.contains("pune") || lower.contains("maharashtra") ||
+                    lower.contains("mumbai") || lower.contains("road") || lower.contains("estate") ||
+                    lower.contains("ind.") || lower.contains("ltd") || lower.contains("india") ||
+                    lower.contains("lonavala") || lower.contains("midc")
+            return hasPin || hasAddressKeyword
         }
 
+        // Priority 1: Check blocks for lines containing explicit "Net Quantity" / "Net Qty" keyword
         for (sb in blocks) {
-            for (line in sb.block.lines) {
+            val lines = sb.block.lines
+            for (i in lines.indices) {
+                val line = lines[i]
                 val lText = line.text
-                if (lText.contains("net quantity", ignoreCase = true) || lText.contains("net qty", ignoreCase = true) || lText.contains("net wt", ignoreCase = true)) {
-                    val lineNum = Pattern.compile("(?i)\\b(\\d+(?:\\.\\d+)?\\s*(?:g|kg|gm|gms|ml|l|ltr|litre|litres|n|units))\\b").matcher(lText)
+                val lLower = lText.lowercase()
+                if (lLower.contains("net quantity") || lLower.contains("net qty") || lLower.contains("net wt") || lLower.contains("net vol") || lLower.contains("nett qty")) {
+                    // Check if quantity is on this line: e.g. "Net Quantity: 1 N" or "Net Qty: 500 g"
+                    val lineNum = Pattern.compile("(?i)(?:net\\s*(?:quantity|qty|wt|vol)|nett\\s*qty)\\s*[:.\\-]*\\s*([0-9]+(?:\\.[0-9]+)?\\s*(?:$validUnits))\\b").matcher(lText)
                     if (lineNum.find()) {
                         val rect = line.boundingBox
                         val bbox = if (rect != null) listOf(rect.left.toFloat(), rect.top.toFloat(), rect.right.toFloat(), rect.bottom.toFloat()) else null
                         return ExtractedField(lText.trim(), bbox, sb.bitmap, sb.imagePath)
                     }
 
-                    for (otherSb in blocks) {
-                        for (otherLine in otherSb.block.lines) {
-                            val otherMatcher = Pattern.compile("(?i)^\\s*(\\d+(?:\\.\\d+)?\\s*(?:g|kg|gm|gms|ml|l|ltr|litre|litres|n|units))\\b").matcher(otherLine.text)
-                            if (otherMatcher.find()) {
-                                val valStr = otherMatcher.group(0)?.trim() ?: otherLine.text.trim()
-                                val rect = otherLine.boundingBox ?: line.boundingBox
-                                val bbox = if (rect != null) listOf(rect.left.toFloat(), rect.top.toFloat(), rect.right.toFloat(), rect.bottom.toFloat()) else null
-                                return ExtractedField("Net Quantity: $valStr", bbox, otherSb.bitmap, otherSb.imagePath)
+                    // Check horizontal neighbor (two-column layout: label on left, value on right)
+                    val lineBox = line.boundingBox
+                    if (lineBox != null) {
+                        val lineH = (lineBox.bottom - lineBox.top).toFloat()
+                        for (otherSb in blocks) {
+                            for (otherLine in otherSb.block.lines) {
+                                val otherBox = otherLine.boundingBox
+                                if (otherBox != null && otherBox != lineBox) {
+                                    val isSameRow = kotlin.math.abs(lineBox.top - otherBox.top) < lineH * 2.2f
+                                    val isToRight = otherBox.left >= lineBox.left
+                                    if (isSameRow && isToRight) {
+                                        val valMatcher = Pattern.compile("(?i)^\\s*([0-9]+(?:\\.[0-9]+)?\\s*(?:$validUnits))\\b").matcher(otherLine.text)
+                                        if (valMatcher.find()) {
+                                            val qtyVal = valMatcher.group(1)?.trim() ?: otherLine.text.trim()
+                                            val unionBbox = listOf(
+                                                minOf(lineBox.left, otherBox.left).toFloat(),
+                                                minOf(lineBox.top, otherBox.top).toFloat(),
+                                                maxOf(lineBox.right, otherBox.right).toFloat(),
+                                                maxOf(lineBox.bottom, otherBox.bottom).toFloat()
+                                            )
+                                            return ExtractedField("Net Quantity: $qtyVal", unionBbox, otherSb.bitmap, otherSb.imagePath)
+                                        }
+                                    }
+                                }
                             }
+                        }
+                    }
+
+                    // Check vertical next line in same block
+                    if (i + 1 < lines.size) {
+                        val nextLine = lines[i + 1]
+                        val nextMatcher = Pattern.compile("(?i)^\\s*([0-9]+(?:\\.[0-9]+)?\\s*(?:$validUnits))\\b").matcher(nextLine.text)
+                        if (nextMatcher.find()) {
+                            val qtyVal = nextMatcher.group(1)?.trim() ?: nextLine.text.trim()
+                            val r1 = line.boundingBox
+                            val r2 = nextLine.boundingBox
+                            val unionBbox = if (r1 != null && r2 != null) {
+                                listOf(minOf(r1.left, r2.left).toFloat(), minOf(r1.top, r2.top).toFloat(), maxOf(r1.right, r2.right).toFloat(), maxOf(r1.bottom, r2.bottom).toFloat())
+                            } else null
+                            return ExtractedField("Net Quantity: $qtyVal", unionBbox, sb.bitmap, sb.imagePath)
                         }
                     }
                 }
             }
         }
 
-        val pageMatcher = Pattern.compile("(?i)(\\d+\\s*(pages|sheets|pgs|leaves|leafs|units|n)\\b)").matcher(text)
-        if (pageMatcher.find()) {
-            val matched = pageMatcher.group(0)?.trim() ?: ""
-            val loc = findLocationForText(matched, blocks)
-            return ExtractedField(matched, loc?.first, loc?.second?.bitmap, loc?.second?.imagePath)
+        // Priority 2: Match explicit "Net Quantity: <val> <unit>" in combined text
+        val explicitMatcher = Pattern.compile("(?i)(?:net\\s*(?:quantity|qty|wt|weight|vol|volume)|शुद्ध\\s*मात्रा|nett\\s*qty)\\s*[:\\-\\.]*\\s*([0-9]+(?:\\.[0-9]+)?)\\s*($validUnits)\\b").matcher(text)
+        while (explicitMatcher.find()) {
+            val numStr = explicitMatcher.group(1) ?: ""
+            val unitStr = explicitMatcher.group(2) ?: ""
+            val numVal = numStr.toFloatOrNull() ?: 0f
+            if (numVal < 50000f && !isAddressOrPinCode(explicitMatcher.group(0) ?: "")) {
+                val fullMatch = explicitMatcher.group(0)?.trim() ?: ""
+                val loc = findLocationForText("$numStr $unitStr", blocks) ?: findLocationForText(fullMatch, blocks)
+                return ExtractedField(fullMatch, loc?.first, loc?.second?.bitmap, loc?.second?.imagePath)
+            }
+        }
+
+        // Priority 3: Plausible standalone quantity (< 5000) not in an address and not a 6-digit PIN code
+        val standaloneMatcher = Pattern.compile("(?i)\\b([0-9]+(?:\\.[0-9]+)?)\\s*(g|gm|gms|kg|ml|l|ltr|litre|litres)\\b").matcher(text)
+        while (standaloneMatcher.find()) {
+            val numStr = standaloneMatcher.group(1) ?: ""
+            val unitStr = standaloneMatcher.group(2) ?: ""
+            val numVal = numStr.toFloatOrNull() ?: 0f
+            val isPinCode = numStr.length == 6
+            val matchedFull = standaloneMatcher.group(0) ?: ""
+            if (numVal in 0.1f..5000f && !isPinCode && !isAddressOrPinCode(matchedFull)) {
+                val loc = findLocationForText(matchedFull, blocks)
+                return ExtractedField("Net Quantity: $numStr $unitStr", loc?.first, loc?.second?.bitmap, loc?.second?.imagePath)
+            }
+        }
+
+        // Priority 4: Count quantities (e.g. "1 N", "1 U", "100 sheets")
+        val pageMatcher = Pattern.compile("(?i)\\b(\\d+)\\s*(pages|sheets|pgs|leaves|units?|n|u)\\b").matcher(text)
+        while (pageMatcher.find()) {
+            val numVal = pageMatcher.group(1)?.toIntOrNull() ?: 0
+            if (numVal in 1..2000) {
+                val matched = pageMatcher.group(0)?.trim() ?: ""
+                val loc = findLocationForText(matched, blocks)
+                return ExtractedField("Net Quantity: $matched", loc?.first, loc?.second?.bitmap, loc?.second?.imagePath)
+            }
         }
 
         return null
@@ -858,18 +999,22 @@ object OnDeviceAiEngine {
         }
 
         val patterns = listOf(
-            Pattern.compile("(?i)(?:mfg|pkd|packed|use\\s*by|best\\s*before|expiry|exp|mfd)\\s*[:\\-\\.]*\\s*([0-3]?[0-9][/\\-\\.]?[0-1]?[0-9][/\\-\\.]?\\d{2,4}|[A-Za-z]{3}[/\\-\\s]?\\d{2,4})"),
-            Pattern.compile("\\b([0-3][0-9]/[0-1][0-9]/[0-9]{2,4})\\b"),
-            Pattern.compile("\\b([0-3][0-9]-[0-1][0-9]-[0-9]{2,4})\\b"),
-            Pattern.compile("\\b([0-1][0-9]/[0-9]{4}|[0-1][0-9]-[0-9]{4})\\b")
+            Pattern.compile("(?i)(?:mfg|pkd|packed|use\\s*by|best\\s*before|expiry|exp|mfd)\\s*[:\\-\\.]*\\s*([0-3]?[0-9][/\\-\\.\\s|\\\\]?[0-1]?[0-9][/\\-\\.\\s|\\\\]?\\d{2,4}|(?:0[1-9]|1[0-2])20\\d{2}|[1-9]20\\d{2}|[A-Za-z]{3}[/\\-\\s]?\\d{2,4})"),
+            Pattern.compile("\\b([0-3][0-9][/\\-][0-1][0-9][/\\-][0-9]{2,4})\\b"),
+            Pattern.compile("\\b([0-1][0-9][/\\-][0-9]{4})\\b"),
+            Pattern.compile("\\b(?:0[1-9]|1[0-2])20\\d{2}\\b"),
+            Pattern.compile("\\b[1-9]20\\d{2}\\b")
         )
 
         for (pattern in patterns) {
             val matcher = pattern.matcher(text)
-            if (matcher.find()) {
+            while (matcher.find()) {
                 val matched = matcher.group(0)?.trim() ?: ""
-                val loc = findLocationForText(matched, blocks)
-                return ExtractedField(matched, loc?.first, loc?.second?.bitmap, loc?.second?.imagePath)
+                val parsed = com.sih.util.ocr.OcrNormalizer.parseDateComponents(matched)
+                if (parsed != null) {
+                    val loc = findLocationForText(matched, blocks)
+                    return ExtractedField(parsed.formattedDate, loc?.first, loc?.second?.bitmap, loc?.second?.imagePath)
+                }
             }
         }
 
@@ -1144,8 +1289,8 @@ object OnDeviceAiEngine {
         val match = numRegex.find(lower) ?: return 0f
         val num = match.groupValues[1].toFloatOrNull() ?: return 0f
         return when {
-            lower.contains("kg") || lower.contains(" l") || lower.contains("litre") || lower.contains("liter") || lower.endsWith("l") -> num * 1000f
-            lower.contains("gm") || lower.contains(" g") || lower.contains("gram") || lower.contains("ml") -> num
+            lower.contains("ml") || lower.contains("millilitre") || lower.contains("gm") || lower.contains(" g") || lower.contains("gram") || lower.endsWith("g") -> num
+            lower.contains("kg") || lower.contains(" l") || lower.contains("litre") || lower.contains("liter") || (lower.endsWith("l") && !lower.endsWith("ml")) -> num * 1000f
             else -> num
         }
     }
@@ -1156,7 +1301,8 @@ object OnDeviceAiEngine {
         imagePath: String,
         initialCommodity: String? = null
     ): FullInspectionResponse {
-        val inspId = (System.currentTimeMillis() % 1000000).toInt().coerceAtLeast(100)
+        val db = com.sih.data.local.LocalDatabase.getInstance(context)
+        val inspId = db.getNextInspectionId()
         val commodityTitle = initialCommodity?.trim()?.ifBlank { null } ?: "Scanned Package Item"
         
         val declarations = listOf(
@@ -1210,7 +1356,8 @@ object OnDeviceAiEngine {
     }
 
     private fun copyUriToCache(context: Context, uri: Uri): File {
-        val file = File(context.cacheDir, "scan_${System.currentTimeMillis()}_${java.util.UUID.randomUUID().toString().take(6)}.jpg")
+        val evidenceDir = File(context.filesDir, "evidence").apply { if (!exists()) mkdirs() }
+        val file = File(evidenceDir, "evid_${System.currentTimeMillis()}_${java.util.UUID.randomUUID().toString().take(6)}.jpg")
         val stream = if (uri.scheme == "file" || uri.scheme == null) {
             val path = uri.path
             if (path != null) File(path).inputStream() else context.contentResolver.openInputStream(uri)

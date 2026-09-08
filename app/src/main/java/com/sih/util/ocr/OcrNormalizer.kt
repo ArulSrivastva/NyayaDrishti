@@ -72,7 +72,7 @@ object OcrNormalizer {
         val charArray = text.toCharArray()
         for (i in charArray.indices) {
             if (charArray[i] in hindiNumerals) {
-                charArray[i] = (charArray[i] - '०' + '0'.toInt()).toChar()
+                charArray[i] = (charArray[i] - '०' + '0'.code).toChar()
                 hasHindi = true
             }
         }
@@ -87,7 +87,7 @@ object OcrNormalizer {
         val charArray2 = text.toCharArray()
         for (i in charArray2.indices) {
             if (charArray2[i] in tamilNumerals) {
-                charArray2[i] = (charArray2[i] - '௦' + '0'.toInt()).toChar()
+                charArray2[i] = (charArray2[i] - '௦' + '0'.code).toChar()
                 hasTamil = true
             }
         }
@@ -140,7 +140,7 @@ object OcrNormalizer {
             if (lines.isEmpty()) continue
 
             var currentGroupLines = mutableListOf(lines.first())
-            var currentGroupBbox = lines.first().boundingBox
+            var currentGroupBbox = lines.first().boundingBox?.let { android.graphics.Rect(it) }
             
             for (i in 1 until lines.size) {
                 val currentLine = lines[i]
@@ -159,14 +159,14 @@ object OcrNormalizer {
                     if (verticalGap < 1.5 * avgHeight) {
                         currentGroupLines.add(currentLine)
                         
-                        // update bounding box union
+                        // update bounding box union safely without mutating ML Kit's Rect
                         currentGroupBbox?.let { cb ->
                             cb.left = minOf(cb.left, currentBbox.left)
                             cb.top = minOf(cb.top, currentBbox.top)
                             cb.right = maxOf(cb.right, currentBbox.right)
                             cb.bottom = maxOf(cb.bottom, currentBbox.bottom)
                         } ?: run {
-                            currentGroupBbox = currentBbox
+                            currentGroupBbox = android.graphics.Rect(currentBbox)
                         }
                     } else {
                         // Create group
@@ -176,7 +176,7 @@ object OcrNormalizer {
                         groupedBlocks.add(GroupedTextBlock(text, normalized, bboxFloat, info.imagePath, null, currentGroupLines.size))
                         
                         currentGroupLines = mutableListOf(currentLine)
-                        currentGroupBbox = currentBbox
+                        currentGroupBbox = android.graphics.Rect(currentBbox)
                     }
                 } else {
                     currentGroupLines.add(currentLine)
@@ -197,11 +197,11 @@ object OcrNormalizer {
         val candidates = mutableListOf<DeclarationCandidate>()
         
         val mrpRegex = "(?i)(?:m\\.?r\\.?p\\.?|mrp|retail\\s*price)\\s*[:.]?\\s*(?:rs\\.?|₹|RS)?\\s*([0-9,]+(?:\\.[0-9]{1,2})?)".toRegex()
-        val netQtyRegex = "(?i)(?:net\\s*(?:qty|quantity|wt|weight|vol|volume))\\s*[:.-]*\\s*([0-9]+(?:\\.[0-9]+)?)\\s*(g|gm|kg|ml|l|ltr|litre|litres|units|n|pages|sheets)".toRegex()
+        val netQtyRegex = "(?i)(?:net\\s*(?:qty|quantity|wt|weight|vol|volume)|nett\\s*qty)\\s*[:.-]*\\s*([0-9]+(?:\\.[0-9]+)?)\\s*(g|gm|gms|kg|ml|l|ltr|litre|litres|units?|pcs?|pieces?|n|u|pages?|sheets?)\\b".toRegex()
         val mfgRegex = "(?i)(?:mfg\\.?\\s*by|manufactured\\s*by|marketed\\s*by)\\s*[:.-]*\\s*(.+?)(?:\\n|$)".toRegex()
         val packerRegex = "(?i)(?:packed\\s*by|pkd\\.?\\s*by)\\s*[:.-]*\\s*(.+?)(?:\\n|$)".toRegex()
         val importerRegex = "(?i)(?:imported\\s*by|importer)\\s*[:.-]*\\s*(.+?)(?:\\n|$)".toRegex()
-        val dateRegex = "(?i)(?:mfg|mfd|pkd|packed|use\\s*by|best\\s*before|expiry|exp)\\s*[:.-]*\\s*([0-3]?[0-9][/\\-\\.][0-1]?[0-9][/\\-\\.]\\d{2,4}|[A-Za-z]{3}[/\\-\\s]?\\d{2,4})".toRegex()
+        val dateRegex = "(?i)(?:mfg|mfd|pkd|packed|use\\s*by|best\\s*before|expiry|exp)\\s*[:.-]*\\s*([0-3]?[0-9][/\\-\\.\\s|\\\\][0-1]?[0-9][/\\-\\.\\s|\\\\]\\d{2,4}|[0-1]?[0-9][/\\-\\.\\s|\\\\]\\d{2,4}|(?:0[1-9]|1[0-2])20\\d{2}|[1-9]20\\d{2}|[A-Za-z]{3}[/\\-\\s]?\\d{2,4})".toRegex()
         val ccRegex = "(?i)(?:consumer\\s*care|customer\\s*care|toll\\s*free|helpline|1800)".toRegex()
         val uspRegex = "(?i)(?:unit\\s*sale\\s*price|usp|u\\.s\\.p|₹\\s*/\\s*(?:kg|g|l|ml))".toRegex()
 
@@ -231,7 +231,44 @@ object OcrNormalizer {
             addCandidate(DeclarationType.MANUFACTURER, mfgRegex.find(text))
             addCandidate(DeclarationType.PACKER, packerRegex.find(text))
             addCandidate(DeclarationType.IMPORTER, importerRegex.find(text))
-            addCandidate(DeclarationType.DATE, dateRegex.find(text))
+
+            val dateMatch = dateRegex.find(text)
+            if (dateMatch != null) {
+                val parsed = parseDateComponents(text)
+                val displayVal = parsed?.formattedDate ?: dateMatch.groupValues.drop(1).joinToString(" ").ifBlank { text }
+                val isExact = text.trim() == dateMatch.value.trim()
+                candidates.add(DeclarationCandidate(
+                    type = DeclarationType.DATE,
+                    rawText = text,
+                    normalizedText = displayVal,
+                    confidence = if (isExact) 0.95f else 0.85f,
+                    confidenceLevel = ConfidenceLevel.HIGH,
+                    boundingBox = block.boundingBox,
+                    sourceEvidenceId = block.sourceEvidenceId,
+                    sourceImagePath = block.sourceImagePath,
+                    rawOcr = text,
+                    enhancedOcr = null,
+                    ambiguityReason = if (parsed != null && !text.contains("/")) "inferred_separator" else null
+                ))
+            } else {
+                val isLikelyBarcodeOrPhone = text.replace(Regex("[^0-9]"), "").length >= 8 && !text.contains("/") && !text.contains("-")
+                val standaloneParsed = if (!isLikelyBarcodeOrPhone) parseDateComponents(text) else null
+                if (standaloneParsed != null) {
+                    candidates.add(DeclarationCandidate(
+                        type = DeclarationType.DATE,
+                        rawText = text,
+                        normalizedText = standaloneParsed.formattedDate,
+                        confidence = 0.70f,
+                        confidenceLevel = ConfidenceLevel.MEDIUM,
+                        boundingBox = block.boundingBox,
+                        sourceEvidenceId = block.sourceEvidenceId,
+                        sourceImagePath = block.sourceImagePath,
+                        rawOcr = text,
+                        enhancedOcr = null,
+                        ambiguityReason = if (!text.contains("/")) "inferred_separator" else null
+                    ))
+                }
+            }
             
             val ccMatch = ccRegex.find(text)
             if (ccMatch != null) {
@@ -278,6 +315,251 @@ object OcrNormalizer {
         return candidates
     }
 
+    data class ParsedDateInfo(
+        val prefix: String,
+        val day: Int?,
+        val month: Int,
+        val year: Int,
+        val isExpiryOrBestBefore: Boolean,
+        val rawDateString: String
+    ) {
+        val formattedDate: String
+            get() = if (day != null) {
+                String.format("%02d/%02d/%04d", day, month, year)
+            } else {
+                String.format("%02d/%04d", month, year)
+            }
+    }
+
+    /**
+     * Parses a date string into components and determines if it is a manufacturing or expiry date.
+     * Robust to dropped/faint slashes, alternative separators (|, -, ., space), and unseparated CIJ dates (e.g. 42026, 042026).
+     * Strictly rejects barcode numbers, phone numbers, and out-of-range years (e.g. 2504).
+     */
+    fun parseDateComponents(text: String): ParsedDateInfo? {
+        val lower = text.lowercase()
+        val isExpiry = lower.contains("exp") || lower.contains("use by") || lower.contains("best before")
+        val hasDateKeyword = lower.contains("mfg") || lower.contains("mfd") || lower.contains("pkd") ||
+                lower.contains("packed") || lower.contains("pack") || isExpiry || lower.contains("date")
+
+        val digitsOnly = text.replace(Regex("[^0-9]"), "")
+        // Reject barcodes, phone numbers, serial codes (e.g. "8 901425 022504" or "52484912500")
+        if (!hasDateKeyword && digitsOnly.length >= 8 && !text.contains("/") && !text.contains("-")) {
+            return null
+        }
+        if (text.contains("tel", ignoreCase = true) || text.contains("phone", ignoreCase = true) || text.contains("care", ignoreCase = true)) {
+            return null
+        }
+        // Reject price lines (e.g. "MRP (Incl. of all taxes): ₹ 12.00" must not be parsed as 12/2000)
+        if (!hasDateKeyword && (lower.contains("mrp") || lower.contains("₹") || lower.contains("rs.") ||
+                lower.contains("rs ") || lower.contains("price") || lower.contains("tax") || lower.contains("incl"))) {
+            return null
+        }
+        // Reject size and quantity lines
+        if (!hasDateKeyword && (lower.contains("net") || lower.contains("qty") || lower.contains("size") ||
+                lower.contains("length") || lower.contains("weight") || lower.contains("vol"))) {
+            return null
+        }
+
+        val currentYear = java.time.Year.now().value
+        val minYear = currentYear - 8
+        val maxYear = currentYear + 6
+
+        fun validateYear(rawYear: Int): Int? {
+            var y = rawYear
+            if (y in 18..35) {
+                y += 2000
+            } else if (y !in minYear..maxYear) {
+                return null
+            }
+            return y
+        }
+
+        // 1. DD/MM/YYYY or DD-MM-YYYY (with slash, dot, dash, space, pipe, backslash)
+        val dmyRegex = """(?i)([0-3]?[0-9])\s*[/.\-\s|\\]\s*([0-1]?[0-9])\s*[/.\-\s|\\]\s*(\d{2,4})""".toRegex()
+        val dmyMatch = dmyRegex.find(text)
+        if (dmyMatch != null) {
+            val d = dmyMatch.groupValues[1].toIntOrNull() ?: return null
+            val m = dmyMatch.groupValues[2].toIntOrNull() ?: return null
+            val rawY = dmyMatch.groupValues[3].toIntOrNull() ?: return null
+            val y = validateYear(rawY)
+            if (y != null && m in 1..12 && d in 1..31) {
+                return ParsedDateInfo(text.substring(0, dmyMatch.range.first).trim(), d, m, y, isExpiry, dmyMatch.value)
+            }
+        }
+
+        // 2. MM/YYYY with separator (slash, dot, dash, space, pipe, backslash)
+        val myRegex = """(?i)\b(0[1-9]|1[0-2]|[1-9])\s*[/.\-\s|\\]\s*(\d{2,4})\b""".toRegex()
+        val myMatch = myRegex.find(text)
+        if (myMatch != null) {
+            val m = myMatch.groupValues[1].toIntOrNull() ?: return null
+            val rawY = myMatch.groupValues[2].toIntOrNull() ?: return null
+            val y = validateYear(rawY)
+            if (y != null && m in 1..12) {
+                return ParsedDateInfo(text.substring(0, myMatch.range.first).trim(), null, m, y, isExpiry, myMatch.value)
+            }
+        }
+
+        // 3. Unseparated Month + 4-digit Year (e.g. "042026", "122025" when slash was dropped by CIJ dot-matrix OCR)
+        val unsep6Regex = """(?i)(?:^|[^\d])(0[1-9]|1[0-2])(20\d{2})(?:$|[^\d])""".toRegex()
+        val match6 = unsep6Regex.find(text)
+        if (match6 != null) {
+            val m = match6.groupValues[1].toIntOrNull()
+            val rawY = match6.groupValues[2].toIntOrNull()
+            val y = rawY?.let { validateYear(it) }
+            if (m != null && y != null && m in 1..12) {
+                return ParsedDateInfo(text.substring(0, match6.range.first).trim(), null, m, y, isExpiry, match6.value.trim())
+            }
+        }
+
+        // 4. Unseparated Single-digit Month + 4-digit Year (e.g. "42026" where leading zero and slash were dropped)
+        val unsep5Regex = """(?i)(?:^|[^\d])([1-9])(20\d{2})(?:$|[^\d])""".toRegex()
+        val match5 = unsep5Regex.find(text)
+        if (match5 != null) {
+            val m = match5.groupValues[1].toIntOrNull()
+            val rawY = match5.groupValues[2].toIntOrNull()
+            val y = rawY?.let { validateYear(it) }
+            if (m != null && y != null && m in 1..12) {
+                return ParsedDateInfo(text.substring(0, match5.range.first).trim(), null, m, y, isExpiry, match5.value.trim())
+            }
+        }
+
+        // 5. Short year with date prefix: e.g. "MFD 0426" or "MFD 426"
+        val shortYearRegex = """(?i)(?:mfg|mfd|pkd|exp|packed)\s*[:.\-]*\s*(0[1-9]|1[0-2]|[1-9])(\d{2})(?:$|[^\d])""".toRegex()
+        val shortMatch = shortYearRegex.find(text)
+        if (shortMatch != null) {
+            val m = shortMatch.groupValues[1].toIntOrNull()
+            val rawY = shortMatch.groupValues[2].toIntOrNull()
+            val y = rawY?.let { validateYear(it) }
+            if (m != null && y != null && m in 1..12) {
+                return ParsedDateInfo(text.substring(0, shortMatch.range.first).trim(), null, m, y, isExpiry, shortMatch.value.trim())
+            }
+        }
+
+        return null
+    }
+
+    /**
+     * Confidence-aware plausibility check for packaging dates under Legal Metrology standards.
+     * Evaluates against device calendar year without hardcoding.
+     */
+    fun evaluateDatePlausibility(
+        dateInfo: ParsedDateInfo,
+        currentYear: Int = java.time.Year.now().value
+    ): Pair<Boolean, String?> {
+        if (dateInfo.isExpiryOrBestBefore) {
+            // Expiry/Best-before can legitimately be in the future (up to 5 years ahead)
+            if (dateInfo.year > currentYear + 5) {
+                return Pair(false, "Expiry date exceeds reasonable horizon (>5 years)")
+            }
+            return Pair(true, null)
+        }
+
+        // Manufacturing / Packing date cannot be in the future (allowing max 1 month grace for end-of-month packing)
+        if (dateInfo.year > currentYear) {
+            return Pair(false, "Manufacturing date is in future ($dateInfo.year > current $currentYear)")
+        }
+
+        return Pair(true, null)
+    }
+
+    /**
+     * Reconciles primary OCR and dot-matrix enhanced OCR passes without silent mutation.
+     * Preserves raw evidence and marks ambiguity for human review.
+     */
+    fun resolveDateCandidate(
+        primaryText: String?,
+        enhancedText: String?,
+        boundingBox: List<Float>?,
+        sourceImagePath: String?,
+        sourceEvidenceId: String?,
+        currentYear: Int = java.time.Year.now().value
+    ): DeclarationCandidate? {
+        val primParsed = primaryText?.let { parseDateComponents(it) }
+        val enhParsed = enhancedText?.let { parseDateComponents(it) }
+
+        if (primParsed == null && enhParsed == null) return null
+
+        val primaryPlausible = primParsed?.let { evaluateDatePlausibility(it, currentYear).first } ?: false
+        val enhancedPlausible = enhParsed?.let { evaluateDatePlausibility(it, currentYear).first } ?: false
+
+        // Case 1: Both passes agree
+        if (primParsed != null && enhParsed != null && primParsed.year == enhParsed.year && primParsed.month == enhParsed.month) {
+            return DeclarationCandidate(
+                type = DeclarationType.DATE,
+                rawText = primaryText,
+                normalizedText = primParsed.formattedDate,
+                confidence = 0.95f,
+                confidenceLevel = ConfidenceLevel.HIGH,
+                boundingBox = boundingBox,
+                sourceEvidenceId = sourceEvidenceId,
+                sourceImagePath = sourceImagePath,
+                rawOcr = primaryText,
+                enhancedOcr = enhancedText,
+                ambiguityReason = null
+            )
+        }
+
+        // Case 2: Primary read future date (e.g. 2028), but enhanced morphological pass resolved to plausible date (e.g. 2026)
+        // Known CIJ dot-matrix confusion 8 <-> 6, 5 <-> 6, 1 <-> 7
+        if (primParsed != null && enhParsed != null && !primaryPlausible && enhancedPlausible) {
+            val isDotMatrixConfusion = (primParsed.year.toString().endsWith("8") && enhParsed.year.toString().endsWith("6")) ||
+                    (primParsed.year.toString().endsWith("6") && enhParsed.year.toString().endsWith("5")) ||
+                    (primParsed.year.toString().endsWith("7") && enhParsed.year.toString().endsWith("1"))
+
+            val reason = if (isDotMatrixConfusion) "dot_matrix_year_ambiguity (${primParsed.year} vs ${enhParsed.year})"
+                         else "pass_disagreement (${primParsed.year} vs ${enhParsed.year})"
+
+            return DeclarationCandidate(
+                type = DeclarationType.DATE,
+                rawText = primaryText,
+                normalizedText = enhParsed.formattedDate, // Provide canonical enhanced reading
+                confidence = 0.70f,
+                confidenceLevel = ConfidenceLevel.REVIEW, // Strictly flagged for human verification!
+                boundingBox = boundingBox,
+                sourceEvidenceId = sourceEvidenceId,
+                sourceImagePath = sourceImagePath,
+                rawOcr = primaryText,
+                enhancedOcr = enhancedText,
+                ambiguityReason = reason
+            )
+        }
+
+        // Case 3: Primary pass is plausible, enhanced is missing or unhelpful
+        if (primParsed != null && primaryPlausible) {
+            return DeclarationCandidate(
+                type = DeclarationType.DATE,
+                rawText = primaryText,
+                normalizedText = primParsed.formattedDate,
+                confidence = 0.85f,
+                confidenceLevel = ConfidenceLevel.MEDIUM,
+                boundingBox = boundingBox,
+                sourceEvidenceId = sourceEvidenceId,
+                sourceImagePath = sourceImagePath,
+                rawOcr = primaryText,
+                enhancedOcr = enhancedText,
+                ambiguityReason = null
+            )
+        }
+
+        // Case 4: Disagreement or single pass with implausible future date -> flag for review
+        val chosenText = primaryText ?: enhancedText ?: ""
+        val fallbackFormatted = (enhParsed ?: primParsed)?.formattedDate ?: chosenText
+        return DeclarationCandidate(
+            type = DeclarationType.DATE,
+            rawText = chosenText,
+            normalizedText = fallbackFormatted,
+            confidence = 0.50f,
+            confidenceLevel = ConfidenceLevel.REVIEW,
+            boundingBox = boundingBox,
+            sourceEvidenceId = sourceEvidenceId,
+            sourceImagePath = sourceImagePath,
+            rawOcr = primaryText,
+            enhancedOcr = enhancedText,
+            ambiguityReason = "implausible_mfg_date"
+        )
+    }
+
     fun runFullPipeline(fullText: String, blocks: List<ScannedBlockInfo>): OcrNormalizationResult {
         val normalizedText = normalizeCharacters(fullText)
         val groupedBlocks = groupAdjacentLines(blocks)
@@ -285,3 +567,4 @@ object OcrNormalizer {
         return OcrNormalizationResult(normalizedText, groupedBlocks, candidates)
     }
 }
+

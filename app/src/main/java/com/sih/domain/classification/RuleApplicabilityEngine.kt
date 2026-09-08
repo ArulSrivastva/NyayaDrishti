@@ -1,4 +1,4 @@
-﻿package com.sih.domain.classification
+package com.sih.domain.classification
 
 object RuleApplicabilityEngine {
 
@@ -132,13 +132,13 @@ object RuleApplicabilityEngine {
         )
 
         // 8. Rule 6(11) — Unit Sale Price (USP)
-        if (numericQuantity > 100f || numericQuantity == 0f) {
+        if (numericQuantity > 10f || numericQuantity == 0f) {
             activeRules.add(
                 ApplicableRule(
                     ruleId = "R6_011",
                     reference = "Rule 6(11)",
                     title = "Unit Sale Price (USP)",
-                    reason = "Package net content exceeds 100g or 100ml. Unit Sale Price (₹/g or ₹/ml) is statutory under Rule 6(11).",
+                    reason = "Mandatory declaration under Rule 6(11) (per g/100g for <1kg, per ml/100ml for <1L, or per kg/L for >=1kg/L).",
                     mandatory = true
                 )
             )
@@ -149,7 +149,7 @@ object RuleApplicabilityEngine {
                     ruleId = "R6_011",
                     reference = "Rule 6(11)",
                     title = "Unit Sale Price (USP)",
-                    reason = "Package net content is <= 100g / 100ml. Exempted under Rule 6(11) statutory proviso.",
+                    reason = "Small package (net content <= 10g / 10ml) exempt under Rule 26 statutory provisions.",
                     mandatory = false
                 )
             )

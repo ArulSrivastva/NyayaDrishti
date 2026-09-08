@@ -15,10 +15,11 @@ object PackageGeometryAnalyzer {
         val ratio = width / height
 
         val (type, confidence, multiImage) = when {
+            ratio > 2.0f -> Triple(PackageType.BLISTER_PACK, 0.65f, false)
             ratio in 0.8f..1.2f -> Triple(PackageType.BOX_CARTON, 0.75f, false)
             ratio > 1.2f -> Triple(PackageType.POUCH, 0.70f, false)
-            ratio < 0.5f -> Triple(PackageType.BOTTLE, 0.65f, true) // Includes CAN
-            ratio > 2.0f -> Triple(PackageType.BLISTER_PACK, 0.60f, false)
+            ratio < 0.5f -> Triple(PackageType.BOTTLE, 0.65f, true) // Tall bottle / cylindrical container
+            ratio in 0.5f..0.8f -> Triple(PackageType.BOX_CARTON, 0.70f, false) // Standard portrait smartphone framing of package/carton
             else -> Triple(PackageType.OTHER, 0.50f, false)
         }
         

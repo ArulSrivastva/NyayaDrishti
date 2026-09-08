@@ -34,8 +34,8 @@ import com.sih.ui.components.InspectionCard
 import com.sih.ui.screens.home.mockRecentInspections
 import com.sih.util.Localization
 
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import com.sih.repository.InspectionRepository
 import kotlinx.coroutines.launch
 
@@ -51,8 +51,11 @@ fun HistoryScreen(
     var historyList by remember { mutableStateOf<List<com.sih.model.Inspection>>(emptyList()) }
     val scope = rememberCoroutineScope()
 
-    LaunchedEffect(Unit) {
-        historyList = InspectionRepository.getRecentInspections()
+    LifecycleResumeEffect(Unit) {
+        scope.launch {
+            historyList = InspectionRepository.getRecentInspections()
+        }
+        onPauseOrDispose { }
     }
 
     val filteredList = historyList.filter {

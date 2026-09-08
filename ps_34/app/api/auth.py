@@ -18,10 +18,13 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)):
     existing = db.scalar(select(User).where(User.email == payload.email))
     if existing:
         raise HTTPException(status_code=409, detail="Email already registered")
+    if payload.role and payload.role.strip().lower() == "admin":
+        raise HTTPException(status_code=403, detail="Self-registration as administrator is not permitted")
+    assigned_role = payload.role if payload.role in ("inspector", "officer", "reviewer") else "inspector"
     user = User(
         email=payload.email,
         full_name=payload.full_name,
-        role=payload.role,
+        role=assigned_role,
         hashed_password=hash_password(payload.password),
     )
     db.add(user)

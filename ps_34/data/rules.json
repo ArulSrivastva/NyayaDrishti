@@ -190,5 +190,17 @@
     "failure": "Package is exempt under Rule 26 if net weight/measure is 10 g/10 ml or less.",
     "severity": "info",
     "description": "Exemption in respect of certain packages (10 g / 10 ml or less) and fast food packed by restaurants, etc."
+  },
+  {
+    "rule_id": "R6_011",
+    "rule_ref": "Rules, 2011 — Rule 6(11)",
+    "field": "unit_sale_price",
+    "declaration_type": "unit_sale_price",
+    "required": false,
+    "category": "declaration_format",
+    "condition": "usp_valid",
+    "failure": "Unit Sale Price (USP) not declared or mathematically incorrect according to net quantity.",
+    "severity": "violation",
+    "description": "Declaration of Unit Sale Price (USP) for packages containing more than 10 g or 10 ml."
   }
 ]

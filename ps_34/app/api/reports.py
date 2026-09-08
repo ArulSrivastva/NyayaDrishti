@@ -17,11 +17,13 @@ settings = get_settings()
 
 
 @router.get("/file/{filename}")
-def download_report(filename: str):
-    path = Path(settings.report_dir) / filename
-    if not path.exists():
+def download_report(filename: str, user: User = Depends(get_current_user)):
+    safe_name = Path(filename).name
+    report_base = Path(settings.report_dir).resolve()
+    target_path = (report_base / safe_name).resolve()
+    if not str(target_path).startswith(str(report_base)) or not target_path.exists() or not target_path.is_file():
         raise HTTPException(status_code=404, detail="Report not found")
-    return FileResponse(path, media_type="application/pdf", filename=filename)
+    return FileResponse(target_path, media_type="application/pdf", filename=safe_name)
 
 
 @router.post("/{inspection_id}")

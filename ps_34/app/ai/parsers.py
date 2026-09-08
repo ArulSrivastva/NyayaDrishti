@@ -34,7 +34,7 @@ QUANTITY_PATTERN = re.compile(
 
 DATE_MONTH_YEAR = re.compile(
     r"(?:mfg|mfd|manf|manufactur(?:ed|ing)|pack|pkg|best|use|exp|expiry|import)?"
-    r"[\s.:\-/]*(\d{1,2})\s*[-/. ]\s*(\d{2,4})(?:\b|$)",
+    r"[\s.:\-/]*(?:([0-1]?[0-9])\s*[-/. |]\s*(\d{2,4})|([1-9])(20\d{2})|(0[1-9]|1[0-2])(20\d{2}))(?:\b|$)",
     re.IGNORECASE,
 )
 DATE_WORDS = re.compile(
@@ -93,9 +93,14 @@ def parse_mrp(text: str, confidence: float = 0.9) -> ParsedValue:
 
 def parse_net_quantity(text: str, confidence: float = 0.9) -> ParsedValue:
     text = normalize_text(text)
+    # Reject address PIN codes (e.g. 410401)
+    if re.search(r"\b[1-9]\d{5}\b", text) and any(w in text.lower() for w in ["pune", "mumbai", "delhi", "road", "estate", "ltd", "india", "lonavala"]):
+        return ParsedValue()
     match = QUANTITY_PATTERN.search(text)
     if match:
         amount = match.group(1).replace(",", "")
+        if float(amount) >= 50000:
+            return ParsedValue()
         unit_raw = match.group(3).lower()
         unit = normalize_unit(unit_raw)
         return ParsedValue(f"{amount} {unit}", unit, _round_confidence(confidence, len(match.group(0))), text)
@@ -122,14 +127,42 @@ def normalize_unit(raw: str) -> str:
 
 def parse_date(text: str, confidence: float = 0.85) -> ParsedValue:
     text = normalize_text(text)
+    digits_only = re.sub(r"[^0-9]", "", text)
+    has_keyword = bool(re.search(r"(?:mfg|mfd|manf|manufactur|pack|pkg|best|use|exp|expiry|import)", text, re.IGNORECASE))
+    if not has_keyword and len(digits_only) >= 8 and not ("/" in text or "-" in text):
+        return ParsedValue()
+
+    has_price = bool(re.search(r"(?:mrp|₹|rs\.?|price|tax|incl)", text, re.IGNORECASE))
+    if not has_keyword and has_price:
+        return ParsedValue()
+
+    has_qty = bool(re.search(r"(?:net\s*qty|quantity|weight|size|length)", text, re.IGNORECASE))
+    if not has_keyword and has_qty:
+        return ParsedValue()
+
     month_year = DATE_MONTH_YEAR.search(text)
     if month_year:
-        month, year = month_year.group(1), month_year.group(2)
+        groups = month_year.groups()
+        if groups[0] and groups[1]:
+            month, year = groups[0], groups[1]
+        elif groups[2] and groups[3]:
+            month, year = groups[2], groups[3]
+        elif groups[4] and groups[5]:
+            month, year = groups[4], groups[5]
+        else:
+            return ParsedValue()
         month = month.zfill(2)
         if not month.isdigit() or not (1 <= int(month) <= 12):
             return ParsedValue()
         if len(year) == 2:
-            year = "20" + year if int(year) <= 30 else "19" + year
+            if not (18 <= int(year) <= 35):
+                return ParsedValue()
+            year = "20" + year if int(year) <= 35 else "19" + year
+        elif len(year) == 4:
+            if not (2018 <= int(year) <= 2032):
+                return ParsedValue()
+        else:
+            return ParsedValue()
         return ParsedValue(f"{month}/{year}", None, _round_confidence(confidence, len(text)), text)
     word_match = DATE_WORDS.search(text)
     if word_match:
@@ -138,7 +171,12 @@ def parse_date(text: str, confidence: float = 0.85) -> ParsedValue:
                 year_match = re.search(r"\d{2,4}", word_match.group(0))
                 year = year_match.group(0) if year_match else "????"
                 if len(year) == 2:
-                    year = "20" + year if int(year) <= 30 else "19" + year
+                    if not (18 <= int(year) <= 35):
+                        return ParsedValue()
+                    year = "20" + year if int(year) <= 35 else "19" + year
+                elif len(year) == 4:
+                    if not (2018 <= int(year) <= 2032):
+                        return ParsedValue()
                 return ParsedValue(f"{num}/{year}", None, _round_confidence(confidence, len(text)), text)
     return ParsedValue()
 

@@ -60,6 +60,21 @@ def test_parse_net_quantity_missing():
     assert result.value == "2 kg"
 
 
+def test_parse_net_quantity_rejects_pincode():
+    # 6-digit postal PIN code in address must never be parsed as quantity
+    assert parse_net_quantity("Pune - 410401, Maharashtra, India. Brand Owner : Kokuyo Camlin Ltd.").ok is False
+    assert parse_net_quantity("410401 Lonavala").ok is False
+
+    # Unit 'N' count declarations
+    r1 = parse_net_quantity("Net Quantity: 1 N")
+    assert r1.ok is True
+    assert r1.value == "1 u"
+
+    r2 = parse_net_quantity("Net Quantity: 1N")
+    assert r2.ok is True
+    assert r2.value == "1 u"
+
+
 def test_parse_date_numeric():
     result = parse_date("Manufactured Date: 08/2026")
     assert result.ok is True
@@ -78,9 +93,46 @@ def test_parse_date_month_word():
     assert result.value == "03/2026"
 
 
+def test_parse_date_dropped_slash():
+    # 5-digit: 42026 -> 04/2026
+    r1 = parse_date("MFD 42026")
+    assert r1.ok is True
+    assert r1.value == "04/2026"
+
+    # 6-digit: 042026 -> 04/2026
+    r2 = parse_date("042026")
+    assert r2.ok is True
+    assert r2.value == "04/2026"
+
+    # Non-standard pipe / space separator
+    r3 = parse_date("04|2026")
+    assert r3.ok is True
+    assert r3.value == "04/2026"
+
+    r4 = parse_date("04 2026")
+    assert r4.ok is True
+    assert r4.value == "04/2026"
+
+
 def test_parse_date_missing():
     result = parse_date("Product of India")
     assert result.ok is False
+
+
+def test_parse_date_rejects_barcodes_and_invalid_years():
+    # Barcode numbers must not be parsed as dates
+    assert parse_date("8 901425 022504").ok is False
+    assert parse_date("8 901425 02 2504").ok is False
+    assert parse_date("52484912500").ok is False
+
+    # Out-of-bounds years like 2504 or 2000 must be rejected
+    assert parse_date("02/2504").ok is False
+    assert parse_date("MFD: 02/2504").ok is False
+    assert parse_date("12/2000").ok is False
+
+    # Prices and MRP lines must not be parsed as dates
+    assert parse_date("MRP (Incl. of all taxes): ₹ 12.00").ok is False
+    assert parse_date("12.00").ok is False
 
 
 def test_parse_phone_toll_free():

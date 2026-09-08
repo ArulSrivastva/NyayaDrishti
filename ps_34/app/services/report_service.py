@@ -63,7 +63,7 @@ def generate_report(db, inspection_id: int) -> str:
     evidences = db.query(Evidence).filter_by(inspection_id=inspection_id).all()
 
     Path(settings.report_dir).mkdir(parents=True, exist_ok=True)
-    filename = f"inspection_{inspection_id}_{datetime.now():%Y%m%d_%H%M%S}.pdf"
+    filename = f"inspection_{inspection_id}.pdf"
     path = os.path.join(settings.report_dir, filename)
     styles = _style_sheet()
 

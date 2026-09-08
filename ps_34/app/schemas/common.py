@@ -23,6 +23,7 @@ class ProductFields(BaseModel):
     packing_date: Optional[FieldValue] = None
     consumer_care: Optional[FieldValue] = None
     commodity: Optional[FieldValue] = None
+    unit_sale_price: Optional[FieldValue] = None
 
 
 class Declaration(BaseModel):

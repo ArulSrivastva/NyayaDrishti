@@ -3,6 +3,7 @@ from __future__ import annotations
 from functools import lru_cache
 
 import app.rules.units as units
+import app.rules.usp as usp
 from app.rules.registry import get_registry
 
 TAX_NOTE_PATTERNS = ("incl", "inclusive", "taxes")
@@ -122,6 +123,7 @@ def evaluate(ai_result, rules_file=None) -> ComplianceOutcome:
             ai_result=ai_result,
             net_qty_info=net_qty_info,
             exempt=exempt,
+            declarations=declarations,
         )
         results.append(RuleResult(rule_id, result, reason, severity))
 
@@ -129,7 +131,7 @@ def evaluate(ai_result, rules_file=None) -> ComplianceOutcome:
     return ComplianceOutcome(status, results, notes)
 
 
-def _apply_condition(condition, present, rule, ai_result, net_qty_info, exempt) -> tuple[str, str]:
+def _apply_condition(condition, present, rule, ai_result, net_qty_info, exempt, declarations=None) -> tuple[str, str]:
     rule_id = rule["rule_id"]
     failure = rule["failure"]
 
@@ -219,6 +221,31 @@ def _apply_condition(condition, present, rule, ai_result, net_qty_info, exempt) 
         if ocr_confidence < 0.6:
             return "REVIEW", "OCR confidence is low; legibility of declarations should be visually verified."
         return "PASS", "Declarations detected with acceptable legibility confidence."
+
+    if condition == "usp_valid":
+        if exempt:
+            return "PASS", "Rule 26 exemption applicable (10 g/10 ml or less); USP declaration not mandatory."
+        mrp_val = _find_field_raw(ai_result.product, "mrp") or _find_field_value(ai_result.product, "mrp")
+        net_qty_val = _find_field_raw(ai_result.product, "net_quantity") or _find_field_value(ai_result.product, "net_quantity")
+        usp_val = _find_field_raw(ai_result.product, "unit_sale_price") or _find_field_value(ai_result.product, "unit_sale_price")
+        
+        if not usp_val:
+            # Check if declaration type unit_sale_price has a value
+            usp_decl = declarations.get("unit_sale_price") if "declarations" in locals() else None
+            if usp_decl:
+                usp_val = usp_decl.get("value")
+
+        usp_check = usp.verify_declared_usp(usp_val, mrp_val, net_qty_val)
+        if usp_check.status == usp.UspStatus.VERIFIED:
+            return "PASS", f"Unit Sale Price verified: {usp_val}"
+        elif usp_check.status == usp.UspStatus.MISSING:
+            return "REVIEW", "Unit Sale Price (USP) declaration not detected for package exceeding 10 g/10 ml."
+        elif usp_check.status == usp.UspStatus.MISMATCH:
+            return "FAIL", f"Unit Sale Price mismatch: declared '{usp_val}', expected '{usp_check.display_value}'."
+        elif usp_check.status == usp.UspStatus.EXEMPT:
+            return "PASS", "Package is exempt from USP requirement under Rule 26."
+        else:
+            return "REVIEW", "Unable to reliably verify declared Unit Sale Price against MRP and net quantity."
 
     if rule_id == "R26_001":
         return "INFO", "Package checked against Rule 26 exemption conditions."

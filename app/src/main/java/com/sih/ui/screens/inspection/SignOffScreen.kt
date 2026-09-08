@@ -219,7 +219,7 @@ private fun finalizeInspection(
 
     val officerId = ApiClient.getTokenManager()?.getUserId()?.toString()?.toIntOrNull() ?: 0
     val officerName = ApiClient.getTokenManager()?.getUserName() ?: "Unknown Officer"
-    val timestamp = LocalDateTime.now().format(DateTimeFormatter.ISO_DATE_TIME)
+    val timestamp = java.time.Instant.now().toString()
     
     val signOff = InspectionSignOff(
         officerId = officerId,
@@ -242,11 +242,18 @@ private fun finalizeInspection(
             inspectionState = "FINALIZED"
         )
         InspectionRepository.currentInspection = updated
-        val inspId = updated.inspectionId ?: 1
+        val inspId = updated.inspectionId ?: InspectionRepository.currentInspectionId ?: 1
         try {
-            com.sih.data.local.LocalDatabase.getInstance(context).saveSignOff(inspId.toString(), signOff)
-            com.sih.data.local.LocalDatabase.getInstance(context).insertOrUpdateInspection(updated)
-            com.sih.data.local.LocalDatabase.getInstance(context).updateDraftState(inspId.toString(), com.sih.model.DraftState.COMPLETED, gson.toJson(updated))
+            val db = com.sih.data.local.LocalDatabase.getInstance(context)
+            db.saveSignOff(inspId.toString(), signOff)
+            db.insertOrUpdateInspection(updated)
+            db.updateDraftState(inspId.toString(), com.sih.model.DraftState.COMPLETED, gson.toJson(updated))
+
+            // Ensure any active draft in memory or by draft ID is completed and cleared
+            InspectionRepository.currentDraft?.let { d ->
+                db.updateDraftState(d.inspectionId, com.sih.model.DraftState.COMPLETED, gson.toJson(updated))
+            }
+            InspectionRepository.currentDraft = null
         } catch (e: Exception) {
             android.util.Log.e("SignOffScreen", "Error saving signoff: ${e.message}", e)
         }

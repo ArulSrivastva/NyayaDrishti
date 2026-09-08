@@ -11,6 +11,10 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -46,8 +50,18 @@ fun HumanReviewScreen(
     }
 
     val declarations = liveResult?.declarations ?: emptyList()
-    val reviewTarget = declarations.firstOrNull { it.present == false }
-        ?: declarations.minByOrNull { it.confidence ?: 1.0f }
+    // Identify all items that require human review (missing or confidence < 0.7)
+    val reviewItems = remember(declarations) {
+        val pending = declarations.filter { it.present == false || (it.confidence ?: 1.0f) < 0.70f }
+        if (pending.isEmpty() && declarations.isNotEmpty()) {
+            listOfNotNull(declarations.minByOrNull { it.confidence ?: 1.0f })
+        } else {
+            pending
+        }
+    }
+
+    var currentIndex by remember { mutableIntStateOf(0) }
+    val reviewTarget = reviewItems.getOrNull(currentIndex) ?: declarations.firstOrNull()
 
     val fieldDisplayName = when (reviewTarget?.type) {
         "net_quantity" -> "Net Quantity"
@@ -62,9 +76,9 @@ fun HumanReviewScreen(
     }
 
     val ruleRef = when (reviewTarget?.type) {
-        "net_quantity" -> "Rule 6(1)(f)"
-        "mrp" -> "Rule 6(1)(e)"
-        "date" -> "Rule 6(1)(d)"
+        "net_quantity" -> "Rule 6(1)(d)"
+        "date" -> "Rule 6(1)(e)"
+        "mrp" -> "Rule 6(1)(f)"
         "manufacturer" -> "Rule 6(1)(b)"
         "consumer_care" -> "Rule 6(1)(g)"
         "packer" -> "Rule 10(1)"
@@ -87,9 +101,11 @@ fun HumanReviewScreen(
         if (id != null) {
             scope.launch {
                 InspectionRepository.submitDecision(id, "ACCEPT", "Inspector verified $fieldDisplayName present")
-                Toast.makeText(context, "Verified: $fieldDisplayName Present", Toast.LENGTH_SHORT).show()
-                onPresent()
             }
+        }
+        Toast.makeText(context, "Verified: $fieldDisplayName Present", Toast.LENGTH_SHORT).show()
+        if (currentIndex < reviewItems.size - 1) {
+            currentIndex++
         } else {
             onPresent()
         }
@@ -100,9 +116,11 @@ fun HumanReviewScreen(
         if (id != null) {
             scope.launch {
                 InspectionRepository.submitDecision(id, "REJECT", "Inspector confirmed $fieldDisplayName missing")
-                Toast.makeText(context, "Confirmed: $fieldDisplayName Missing", Toast.LENGTH_SHORT).show()
-                onMissing()
             }
+        }
+        Toast.makeText(context, "Confirmed: $fieldDisplayName Missing", Toast.LENGTH_SHORT).show()
+        if (currentIndex < reviewItems.size - 1) {
+            currentIndex++
         } else {
             onMissing()
         }

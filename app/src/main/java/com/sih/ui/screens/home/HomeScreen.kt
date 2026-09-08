@@ -51,7 +51,10 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.lifecycle.compose.LifecycleResumeEffect
+import kotlinx.coroutines.launch
 import com.sih.repository.InspectionRepository
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -62,12 +65,16 @@ fun HomeScreen(
     onInspectionClick: (Inspection) -> Unit
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
+    val scope = rememberCoroutineScope()
     var inspectionsList by remember { mutableStateOf<List<Inspection>>(emptyList()) }
     var activeDrafts by remember { mutableStateOf<List<com.sih.model.InspectionDraft>>(emptyList()) }
 
-    LaunchedEffect(Unit) {
-        inspectionsList = InspectionRepository.getRecentInspections()
-        activeDrafts = InspectionRepository.getActiveDrafts(context)
+    LifecycleResumeEffect(Unit) {
+        scope.launch {
+            inspectionsList = InspectionRepository.getRecentInspections()
+            activeDrafts = InspectionRepository.getActiveDrafts(context)
+        }
+        onPauseOrDispose { }
     }
 
     val totalCount = inspectionsList.size
@@ -284,18 +291,21 @@ fun StatsSection(
             title = Localization.getString("inspections", language),
             value = inspectionsCount,
             icon = Icons.Default.TaskAlt,
+            iconTint = MaterialTheme.colorScheme.primary,
             modifier = Modifier.weight(1f)
         )
         StatusCard(
             title = Localization.getString("violations", language),
             value = violationsCount,
             icon = Icons.AutoMirrored.Filled.Assignment,
+            iconTint = Color(0xFFD97706),
             modifier = Modifier.weight(1f)
         )
         StatusCard(
             title = Localization.getString("high_risk", language),
             value = highRiskCount,
             icon = Icons.Default.ReportProblem,
+            iconTint = MaterialTheme.colorScheme.error,
             modifier = Modifier.weight(1f)
         )
     }

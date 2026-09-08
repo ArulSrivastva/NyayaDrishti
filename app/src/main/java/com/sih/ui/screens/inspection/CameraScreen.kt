@@ -21,7 +21,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FlashOn
-import androidx.compose.material.icons.filled.Lightbulb
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -108,6 +107,11 @@ fun CameraPreviewContent(
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val cameraExecutor = remember { Executors.newSingleThreadExecutor() }
+    DisposableEffect(Unit) {
+        onDispose {
+            cameraExecutor.shutdown()
+        }
+    }
     
     val controller = remember {
         LifecycleCameraController(context).apply {
@@ -202,16 +206,6 @@ fun CameraPreviewContent(
             }
         }
         
-        // Indicators
-        Column(
-            modifier = Modifier
-                .align(Alignment.CenterEnd)
-                .padding(end = 24.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            CameraIndicator(icon = Icons.Default.Lightbulb, label = "Good Light", active = true)
-            CameraIndicator(icon = Icons.Default.Warning, label = "Blurry", active = false)
-        }
         
         // Bottom Controls
         Column(
@@ -573,10 +567,9 @@ private fun takePhoto(
     onError: (Exception) -> Unit
 ) {
     val outputDirectory = context.externalCacheDir ?: context.cacheDir
-    val photoFile = File(
-        outputDirectory,
-        SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(System.currentTimeMillis()) + ".jpg"
-    )
+    val timestamp = SimpleDateFormat("yyyyMMdd-HHmmss-SSS", Locale.US).format(System.currentTimeMillis())
+    val uniqueId = UUID.randomUUID().toString().take(6)
+    val photoFile = File(outputDirectory, "IMG_${timestamp}_$uniqueId.jpg")
 
     val outputOptions = ImageCapture.OutputFileOptions.Builder(photoFile).build()
 
@@ -601,33 +594,7 @@ private fun takePhoto(
     )
 }
 
-@Composable
-fun CameraIndicator(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    label: String,
-    active: Boolean
-) {
-    Card(
-        colors = CardDefaults.cardColors(
-            containerColor = if (active) Color.Black.copy(alpha = 0.6f) else Color.Red.copy(alpha = 0.6f)
-        ),
-        shape = RoundedCornerShape(24.dp)
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = Color.White,
-                modifier = Modifier.size(16.dp)
-            )
-            Spacer(modifier = Modifier.size(4.dp))
-            Text(label, color = Color.White, style = MaterialTheme.typography.labelSmall)
-        }
-    }
-}
+
 
 @androidx.compose.ui.tooling.preview.Preview
 @Composable

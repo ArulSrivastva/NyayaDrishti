@@ -40,15 +40,19 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.SuggestionChipDefaults
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -56,6 +60,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.activity.compose.BackHandler
 import com.sih.util.Localization
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -70,16 +75,42 @@ fun NewInspectionScreen(
         onNavigateBack()
     }
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val scrollState = rememberScrollState()
+    val focusRequester = remember { FocusRequester() }
+    val activeDraft = InspectionRepository.currentDraft
     var commodityName by remember { mutableStateOf("") }
-    var establishmentName by remember { mutableStateOf("") }
-    var location by remember { mutableStateOf("") }
-    var inspectionType by remember { mutableStateOf("Routine Inspection") }
-    var numberOfPackages by remember { mutableStateOf("1") }
-    var remarks by remember { mutableStateOf("") }
+    var establishmentName by remember { mutableStateOf(activeDraft?.establishmentName ?: InspectionRepository.currentEstablishmentName ?: "") }
+    var location by remember { mutableStateOf(activeDraft?.location ?: InspectionRepository.currentLocation ?: "") }
+    var inspectionType by remember { mutableStateOf(activeDraft?.inspectionType ?: InspectionRepository.currentInspectionType ?: "Routine Inspection") }
+    var numberOfPackages by remember { mutableStateOf(InspectionRepository.currentNumberOfPackages ?: "1") }
+    var remarks by remember { mutableStateOf(InspectionRepository.currentRemarks ?: "") }
     var showError by remember { mutableStateOf(false) }
 
+    fun validateCommodity(): Boolean {
+        if (commodityName.trim().isBlank()) {
+            showError = true
+            Toast.makeText(
+                context,
+                Localization.getString("commodity_required_error", selectedLanguage),
+                Toast.LENGTH_LONG
+            ).show()
+            scope.launch {
+                scrollState.animateScrollTo(0)
+                try {
+                    focusRequester.requestFocus()
+                } catch (e: Exception) {
+                    // focus request fallback
+                }
+            }
+            return false
+        }
+        return true
+    }
+
     fun createAndSaveDraft(): String {
-        val inspId = (System.currentTimeMillis() % 1000000).toInt().coerceAtLeast(100).toString()
+        val db = com.sih.data.local.LocalDatabase.getInstance(context)
+        val inspId = InspectionRepository.currentDraft?.inspectionId ?: db.getNextInspectionId().toString()
         val officerId = com.sih.network.ApiClient.getTokenManager()?.getUserId() ?: 1
         val draft = com.sih.model.InspectionDraft(
             inspectionId = inspId,
@@ -99,6 +130,7 @@ fun NewInspectionScreen(
             signOffJson = null,
             lastUpdated = java.time.LocalDateTime.now().toString()
         )
+        InspectionRepository.currentInspectionId = inspId.toIntOrNull()
         InspectionRepository.currentEstablishmentName = establishmentName.ifBlank { "Retail Store" }
         InspectionRepository.currentInspectionType = inspectionType
         InspectionRepository.currentLocation = location.ifBlank { "Field Inspection Zone" }
@@ -115,7 +147,7 @@ fun NewInspectionScreen(
             createAndSaveDraft()
             InspectionRepository.clearCurrentInspection()
             InspectionRepository.activeImageUris = uris
-            InspectionRepository.activeCommodityName = commodityName.trim().ifBlank { null }
+            InspectionRepository.activeCommodityName = commodityName.trim()
             onImagesSelected(uris, commodityName.trim())
         }
     }
@@ -127,7 +159,7 @@ fun NewInspectionScreen(
             createAndSaveDraft()
             InspectionRepository.clearCurrentInspection()
             InspectionRepository.activeImageUris = uris
-            InspectionRepository.activeCommodityName = commodityName.trim().ifBlank { null }
+            InspectionRepository.activeCommodityName = commodityName.trim()
             onImagesSelected(uris, commodityName.trim())
         }
     }
@@ -152,7 +184,7 @@ fun NewInspectionScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .verticalScroll(rememberScrollState())
+                .verticalScroll(scrollState)
                 .padding(24.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
@@ -220,7 +252,9 @@ fun NewInspectionScreen(
                                 }
                             }
                         },
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .focusRequester(focusRequester),
                         shape = RoundedCornerShape(12.dp),
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedBorderColor = MaterialTheme.colorScheme.primary,
@@ -329,20 +363,41 @@ fun NewInspectionScreen(
 
             Spacer(modifier = Modifier.height(4.dp))
 
-            Text(
-                text = Localization.getDualString("select_method", selectedLanguage),
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold
-            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = Localization.getDualString("select_method", selectedLanguage),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+                if (commodityName.trim().isBlank()) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.5f),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text(
+                            text = "* Enter Commodity First",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.error,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
+                    }
+                }
+            }
             
             InspectionMethodCard(
                 title = Localization.getDualString("scan_package", selectedLanguage),
                 description = Localization.getString("scan_desc", selectedLanguage),
                 icon = Icons.Default.CameraAlt,
                 onClick = {
+                    if (!validateCommodity()) return@InspectionMethodCard
                     createAndSaveDraft()
                     InspectionRepository.clearCurrentInspection()
-                    InspectionRepository.activeCommodityName = commodityName.trim().ifBlank { null }
+                    InspectionRepository.activeCommodityName = commodityName.trim()
                     onScanCamera(commodityName.trim())
                 }
             )
@@ -352,8 +407,9 @@ fun NewInspectionScreen(
                 description = Localization.getString("upload_desc", selectedLanguage),
                 icon = Icons.Default.CloudUpload,
                 onClick = { 
+                    if (!validateCommodity()) return@InspectionMethodCard
                     InspectionRepository.clearCurrentInspection()
-                    InspectionRepository.activeCommodityName = commodityName.trim().ifBlank { null }
+                    InspectionRepository.activeCommodityName = commodityName.trim()
                     try {
                         photoPickerLauncher.launch(
                             PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
@@ -376,7 +432,12 @@ fun NewInspectionScreen(
                 title = Localization.getDualString("online_listing", selectedLanguage),
                 description = Localization.getString("online_desc", selectedLanguage),
                 icon = Icons.Default.Language,
-                onClick = onOnlineListing
+                onClick = {
+                    if (!validateCommodity()) return@InspectionMethodCard
+                    createAndSaveDraft()
+                    InspectionRepository.activeCommodityName = commodityName.trim()
+                    onOnlineListing()
+                }
             )
             
             Spacer(modifier = Modifier.height(8.dp))

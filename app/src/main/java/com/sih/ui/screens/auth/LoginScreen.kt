@@ -52,29 +52,36 @@ fun LoginScreen(
     val biometricAuthManager = remember(activity) { activity?.let { BiometricAuthManager(it) } }
     val scope = rememberCoroutineScope()
 
-    var officerId by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
+    var officerId by remember { mutableStateOf("admin@lmcs.gov.in") }
+    var password by remember { mutableStateOf("admin1234") }
     var isLoggingIn by remember { mutableStateOf(false) }
 
     val performLogin: () -> Unit = {
-        if (!isLoggingIn) {
+        if (officerId.isBlank()) {
+            Toast.makeText(context, "Please enter Officer ID / Email", Toast.LENGTH_SHORT).show()
+        } else if (password.isBlank()) {
+            Toast.makeText(context, "Please enter Password", Toast.LENGTH_SHORT).show()
+        } else if (!isLoggingIn) {
             isLoggingIn = true
             val emailInput = when {
-                officerId.isBlank() -> "admin@lmcs.gov.in"
-                officerId.contains("@") -> officerId
-                else -> "inspector_$officerId@lmcs.gov.in"
+                officerId.contains("@") -> officerId.trim()
+                else -> "inspector_${officerId.trim()}@lmcs.gov.in"
             }
-            val passInput = if (password.isNotBlank()) password else "admin1234"
+            val passInput = password.trim()
 
             scope.launch {
                 try {
-                    InspectionRepository.login(emailInput, passInput)
+                    val result = InspectionRepository.login(emailInput, passInput)
+                    if (result.isSuccess) {
+                        Toast.makeText(context, "Welcome, ${result.getOrNull()?.name ?: "Officer"}", Toast.LENGTH_SHORT).show()
+                        onLoginSuccess()
+                    } else {
+                        Toast.makeText(context, "Login failed: Invalid credentials", Toast.LENGTH_LONG).show()
+                    }
                 } catch (e: Exception) {
-                    // Continue in on-device mode
+                    Toast.makeText(context, "Authentication error: ${e.message}", Toast.LENGTH_LONG).show()
                 } finally {
                     isLoggingIn = false
-                    Toast.makeText(context, "Welcome, Officer", Toast.LENGTH_SHORT).show()
-                    onLoginSuccess()
                 }
             }
         }
@@ -85,20 +92,21 @@ fun LoginScreen(
             biometricAuthManager?.let { manager ->
                 if (manager.canAuthenticate()) {
                     manager.authenticate(
-                        onSuccess = { performLogin() },
+                        onSuccess = { 
+                            Toast.makeText(context, "Biometric authentication verified", Toast.LENGTH_SHORT).show()
+                            performLogin() 
+                        },
                         onError = { _, message ->
-                            Toast.makeText(context, "Auth Error: $message", Toast.LENGTH_SHORT).show()
-                            performLogin()
+                            Toast.makeText(context, "Biometric Error: $message", Toast.LENGTH_SHORT).show()
                         },
                         onFailed = {
-                            Toast.makeText(context, "Auth Failed", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, "Biometric not recognized. Please use password.", Toast.LENGTH_SHORT).show()
                         }
                     )
                 } else {
-                    Toast.makeText(context, "Biometrics not available", Toast.LENGTH_SHORT).show()
-                    performLogin()
+                    Toast.makeText(context, "Biometrics not enrolled on device. Use password login.", Toast.LENGTH_SHORT).show()
                 }
-            } ?: performLogin()
+            } ?: Toast.makeText(context, "Biometric service unavailable.", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -137,10 +145,10 @@ fun LoginScreen(
         OutlinedTextField(
             value = officerId,
             onValueChange = { officerId = it },
-            label = { Text("Officer ID") },
+            label = { Text("Officer ID / Email") },
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email)
         )
         
         Spacer(modifier = Modifier.height(16.dp))

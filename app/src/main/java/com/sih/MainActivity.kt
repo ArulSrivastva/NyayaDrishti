@@ -18,6 +18,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
@@ -145,6 +147,7 @@ fun NavHostMain(
     onCommodityNameChange: (String) -> Unit
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     
     NavHost(
         navController = navController,
@@ -172,8 +175,16 @@ fun NavHostMain(
                         restoreState = true
                     }
                 },
-                onInspectionClick = { 
-                    navController.navigate(AppDestinations.PRODUCT_HISTORY.route)
+                onInspectionClick = { inspection ->
+                    val id = inspection.id.toIntOrNull()
+                    if (id != null) {
+                        scope.launch {
+                            com.sih.repository.InspectionRepository.getInspectionFull(id)
+                            navController.navigate(AppDestinations.REPORT.route)
+                        }
+                    } else {
+                        navController.navigate(AppDestinations.REPORT.route)
+                    }
                 }
             )
         }
@@ -296,7 +307,13 @@ fun NavHostMain(
         composable(AppDestinations.REPORT.route) {
             ReportScreen(
                 selectedLanguage = selectedLanguage,
-                onNavigateBack = { navController.popBackStack() }
+                onNavigateBack = { navController.popBackStack() },
+                onFinish = {
+                    com.sih.repository.InspectionRepository.resetSession()
+                    navController.navigate(AppDestinations.HOME.route) {
+                        popUpTo(AppDestinations.HOME.route) { inclusive = true }
+                    }
+                }
             )
         }
         composable(AppDestinations.PROFILE.route) {

@@ -254,7 +254,11 @@ class LocalDatabase(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME,
                         classification = full?.classification,
                         applicableRuleSet = full?.applicableRuleSet,
                         productName = prodName ?: full?.product?.name,
-                        product = full?.product ?: ProductDto(id = prodId, name = prodName ?: "Inspection #$id")
+                        product = full?.product ?: ProductDto(id = prodId, name = prodName ?: "Inspection #$id"),
+                        selectedCategory = full?.selectedCategory,
+                        selectedUnitBasis = full?.selectedUnitBasis,
+                        selectedSchedule = full?.selectedSchedule,
+                        activeChecklist = full?.activeChecklist
                     )
                 )
             }

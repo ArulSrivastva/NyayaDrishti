@@ -321,7 +321,17 @@ fun ReportScreen(
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f))
 
                     ReportKeyValRow("Product Name", liveProduct?.name ?: "Scanned Commodity Package")
-                    ReportKeyValRow("Category", "Packaged Commodity")
+                    val categoryDisplay = liveResult?.selectedCategory ?: liveProduct?.category ?: "Packaged Commodity"
+                    ReportKeyValRow("Category", categoryDisplay)
+                    if (!liveResult?.selectedUnitBasis.isNullOrBlank()) {
+                        ReportKeyValRow("Measurement Basis", liveResult.selectedUnitBasis)
+                    }
+                    if (!liveResult?.selectedSchedule.isNullOrBlank()) {
+                        ReportKeyValRow("Enforcement Schedule", liveResult.selectedSchedule)
+                    }
+                    if (!liveResult?.activeChecklist.isNullOrEmpty()) {
+                        ReportKeyValRow("Audit Scope", liveResult.activeChecklist.joinToString(", "))
+                    }
                     ReportKeyValRow("MRP", cleanMrpText(liveProduct?.mrp))
                     ReportKeyValRow("Net Quantity", cleanQuantityText(liveProduct?.netQuantity))
                     if (!liveDate.isNullOrBlank()) {
@@ -562,6 +572,20 @@ fun ReportScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    if (!liveResult?.selectedSchedule.isNullOrBlank()) {
+                        Text(
+                            text = "Statutory Authority: ${liveResult.selectedSchedule}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    if (!liveResult?.activeChecklist.isNullOrEmpty()) {
+                        Text(
+                            text = "Audit Scope: ${liveResult.activeChecklist.joinToString(" • ")}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                     Text(
                         text = "Evidentiary Integrity: Cryptographic SHA-256 Digest Authenticated under Section 65B of Indian Evidence Act.",
                         style = MaterialTheme.typography.labelSmall,

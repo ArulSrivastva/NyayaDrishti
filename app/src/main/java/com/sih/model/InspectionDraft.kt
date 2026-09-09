@@ -29,5 +29,9 @@ data class InspectionDraft(
     val complianceResultsJson: String?,
     val reviewState: String?,
     val signOffJson: String?,
-    val lastUpdated: String    // ISO 8601
+    val lastUpdated: String,    // ISO 8601
+    val selectedCategory: String? = null,
+    val selectedUnitBasis: String? = null,
+    val selectedSchedule: String? = null,
+    val activeChecklistJson: String? = null
 )

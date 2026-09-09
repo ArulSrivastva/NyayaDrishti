@@ -103,7 +103,10 @@ object ReportGenerator {
                 date = dateVal,
                 consumerCare = consumerCareVal,
                 classification = targetInspection?.classification,
-                applicableRuleSet = targetInspection?.applicableRuleSet
+                applicableRuleSet = targetInspection?.applicableRuleSet,
+                selectedSchedule = targetInspection?.selectedSchedule,
+                selectedCategory = targetInspection?.selectedCategory,
+                activeChecklist = targetInspection?.activeChecklist
             )
 
             // 4. STATUTORY DECLARATIONS AUDIT TABLE (RULE 6, PCR 2011)
@@ -446,7 +449,10 @@ object ReportGenerator {
         date: String,
         consumerCare: String,
         classification: ProductClassification? = null,
-        applicableRuleSet: ApplicableRuleSet? = null
+        applicableRuleSet: ApplicableRuleSet? = null,
+        selectedSchedule: String? = null,
+        selectedCategory: String? = null,
+        activeChecklist: List<String>? = null
     ) {
         pm.ensureSpace(135f)
         drawSectionTitle(pm, "1. COMMODITY & PACKAGING PARTICULARS")
@@ -504,12 +510,12 @@ object ReportGenerator {
 
         rowY += 17f
         canvas.drawText("Category:", col1X, rowY, labelPaint)
-        val catStr = if (classification != null) "${classification.category.displayName} (${classification.subCategory})" else "General Packaged Commodity"
+        val catStr = selectedCategory ?: if (classification != null) "${classification.category.displayName} (${classification.subCategory})" else "General Packaged Commodity"
         canvas.drawText(truncate(catStr, 34), col1ValX, rowY, valPaint)
 
         rowY += 17f
         canvas.drawText("Statutory Rules:", col1X, rowY, labelPaint)
-        val activeCount = applicableRuleSet?.activeRules?.size ?: 8
+        val activeCount = applicableRuleSet?.activeRules?.size ?: (activeChecklist?.size ?: 6)
         val exclCount = applicableRuleSet?.excludedRules?.size ?: 0
         canvas.drawText("$activeCount Active • $exclCount Excluded", col1ValX, rowY, valPaint)
 
@@ -540,7 +546,7 @@ object ReportGenerator {
 
         row2Y += 17f
         canvas.drawText("Schedule Ref:", col2X, row2Y, labelPaint)
-        val schedStr = applicableRuleSet?.statutoryReferences?.firstOrNull() ?: "Legal Metrology Rules 2011"
+        val schedStr = selectedSchedule ?: applicableRuleSet?.statutoryReferences?.firstOrNull() ?: "Legal Metrology Rules 2011"
         canvas.drawText(truncate(schedStr, 38), col2ValX, row2Y, valPaint)
 
         pm.y = startY + boxHeight + 10f

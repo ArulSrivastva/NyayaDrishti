@@ -45,7 +45,7 @@ fun StatusCard(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 6.dp, vertical = 12.dp),
+                .padding(horizontal = 4.dp, vertical = 10.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Box(
@@ -77,8 +77,8 @@ fun StatusCard(
             Text(
                 text = title,
                 style = MaterialTheme.typography.labelSmall.copy(
-                    fontSize = 11.sp,
-                    letterSpacing = 0.sp
+                    fontSize = 10.sp,
+                    letterSpacing = (-0.2).sp
                 ),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontWeight = FontWeight.Medium,

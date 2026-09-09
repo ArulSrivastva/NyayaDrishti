@@ -4,7 +4,11 @@ object RuleApplicabilityEngine {
 
     fun resolveApplicability(
         classification: ProductClassification,
-        numericQuantity: Float = 0f
+        numericQuantity: Float = 0f,
+        officerCategory: String? = null,
+        officerUnitBasis: String? = null,
+        officerSchedule: String? = null,
+        activeChecklist: List<String> = emptyList()
     ): ApplicableRuleSet {
         val activeRules = mutableListOf<ApplicableRule>()
         val excludedRules = mutableListOf<ApplicableRule>()
@@ -12,6 +16,11 @@ object RuleApplicabilityEngine {
 
         // Base Reference
         statutoryRefs.add("Legal Metrology (Packaged Commodities) Rules, 2011")
+
+        // Pre-Scan Statutory Schedule Override / Addition
+        if (!officerSchedule.isNullOrBlank()) {
+            statutoryRefs.add("Officer Selected Schedule: $officerSchedule")
+        }
 
         // 1. Rule 6(1)(a) — Common / Generic Commodity Name
         activeRules.add(
@@ -73,14 +82,24 @@ object RuleApplicabilityEngine {
             }
         }
 
-        // 4. Rule 6(1)(d) — Net Quantity in Standard Metric Units
-        val permittedUnits = when (classification.quantityType) {
-            QuantityType.VOLUME_LIQUID -> listOf("ml", "l", "L")
-            QuantityType.MASS_WEIGHT -> listOf("g", "kg")
-            QuantityType.LENGTH -> listOf("cm", "m")
-            QuantityType.AREA -> listOf("sq cm", "sq m")
-            QuantityType.COUNT_NUMBER -> listOf("N", "U")
-            QuantityType.UNKNOWN -> listOf("g", "kg", "ml", "l", "N", "U")
+        // 4. Rule 6(1)(d) — Net Quantity in Standard Metric Units (Officer Unit Basis takes precedence)
+        val permittedUnits = if (!officerUnitBasis.isNullOrBlank()) {
+            when {
+                officerUnitBasis.contains("Mass", ignoreCase = true) || officerUnitBasis.contains("kg", ignoreCase = true) -> listOf("g", "kg")
+                officerUnitBasis.contains("Volume", ignoreCase = true) || officerUnitBasis.contains("ml", ignoreCase = true) || officerUnitBasis.contains("L", ignoreCase = true) -> listOf("ml", "l", "L")
+                officerUnitBasis.contains("Count", ignoreCase = true) || officerUnitBasis.contains("N", ignoreCase = true) || officerUnitBasis.contains("U", ignoreCase = true) -> listOf("N", "U", "Set", "units")
+                officerUnitBasis.contains("Dimension", ignoreCase = true) || officerUnitBasis.contains("cm", ignoreCase = true) || officerUnitBasis.contains("m", ignoreCase = true) -> listOf("cm", "m", "mm", "sq cm", "sq m")
+                else -> listOf("g", "kg", "ml", "l", "N", "U")
+            }
+        } else {
+            when (classification.quantityType) {
+                QuantityType.VOLUME_LIQUID -> listOf("ml", "l", "L")
+                QuantityType.MASS_WEIGHT -> listOf("g", "kg")
+                QuantityType.LENGTH -> listOf("cm", "m")
+                QuantityType.AREA -> listOf("sq cm", "sq m")
+                QuantityType.COUNT_NUMBER -> listOf("N", "U")
+                QuantityType.UNKNOWN -> listOf("g", "kg", "ml", "l", "N", "U")
+            }
         }
 
         activeRules.add(
@@ -94,7 +113,12 @@ object RuleApplicabilityEngine {
         )
 
         // 5. Rule 6(1)(e) — Month & Year of Packing / Expiry
-        val dateReason = if (classification.category == ProductCategory.FOOD || classification.category == ProductCategory.COSMETIC) {
+        val isFoodOrCosmetic = classification.category == ProductCategory.FOOD || 
+                              classification.category == ProductCategory.COSMETIC ||
+                              officerCategory?.contains("Food", ignoreCase = true) == true ||
+                              officerCategory?.contains("Cosmetic", ignoreCase = true) == true
+
+        val dateReason = if (isFoodOrCosmetic) {
             "Month & year of manufacture/pre-packing is mandatory. Best Before / Expiry declaration required under category standards."
         } else {
             "Month and year of manufacture or pre-packing is mandatory."
@@ -166,8 +190,55 @@ object RuleApplicabilityEngine {
             )
         )
 
+        // 10. Optional Checklist Rules
+        if (activeChecklist.any { it.contains("Veg", ignoreCase = true) }) {
+            activeRules.add(
+                ApplicableRule(
+                    ruleId = "R_VEG_DOT",
+                    reference = "Rule 6 / FSSAI & Cosmetic Color Code",
+                    title = "Vegetarian / Non-Vegetarian Logo",
+                    reason = "Mandatory green/brown color dot logo verification.",
+                    mandatory = true
+                )
+            )
+        }
+
+        if (activeChecklist.any { it.contains("Drained", ignoreCase = true) }) {
+            activeRules.add(
+                ApplicableRule(
+                    ruleId = "R_DRAINED_WT",
+                    reference = "Rule 24",
+                    title = "Drained Weight Statement",
+                    reason = "Commodities packed in liquid medium require declaration of drained weight.",
+                    mandatory = true
+                )
+            )
+        }
+
+        if (officerSchedule?.contains("Second Schedule", ignoreCase = true) == true ||
+            activeChecklist.any { it.contains("Second Schedule", ignoreCase = true) || it.contains("Standard Pack", ignoreCase = true) }) {
+            activeRules.add(
+                ApplicableRule(
+                    ruleId = "R_SCHED_2",
+                    reference = "Rule 5 & Second Schedule",
+                    title = "Standard Pack Size Compliance",
+                    reason = "Commodity subject to mandatory standard quantity packaging prescribed under Second Schedule.",
+                    mandatory = true
+                )
+            )
+            statutoryRefs.add("Second Schedule Mandatory Pack Sizes")
+        }
+
         // Category-Specific Schedule References
-        when (classification.category) {
+        val effectiveCategory = when {
+            officerCategory?.contains("Food", ignoreCase = true) == true -> ProductCategory.FOOD
+            officerCategory?.contains("Cosmetic", ignoreCase = true) == true -> ProductCategory.COSMETIC
+            officerCategory?.contains("Electronic", ignoreCase = true) == true || officerCategory?.contains("Hardware", ignoreCase = true) == true -> ProductCategory.ELECTRONIC
+            officerCategory?.contains("Textile", ignoreCase = true) == true -> ProductCategory.OTHER
+            else -> classification.category
+        }
+
+        when (effectiveCategory) {
             ProductCategory.FOOD -> {
                 statutoryRefs.add("First & Second Schedule (Standard Quantities)")
                 statutoryRefs.add("FSSAI Labeling & Packaging Harmonization")
@@ -186,13 +257,52 @@ object RuleApplicabilityEngine {
             }
         }
 
+        // Active Checklist Scoping Filter: If officer specified an active checklist, exclude rules outside scope
+        val finalActiveRules = mutableListOf<ApplicableRule>()
+        if (activeChecklist.isNotEmpty()) {
+            val hasRule6 = activeChecklist.any { it.contains("Rule 6 Mandatory", ignoreCase = true) }
+            val hasUsp = activeChecklist.any { it.contains("USP", ignoreCase = true) }
+            val hasFont = activeChecklist.any { it.contains("Font", ignoreCase = true) }
+            val hasOrigin = activeChecklist.any { it.contains("Origin", ignoreCase = true) || it.contains("Barcode", ignoreCase = true) }
+            val hasVeg = activeChecklist.any { it.contains("Veg", ignoreCase = true) }
+            val hasDrained = activeChecklist.any { it.contains("Drained", ignoreCase = true) }
+            val hasSched2 = activeChecklist.any { it.contains("Second Schedule", ignoreCase = true) || it.contains("Standard Pack", ignoreCase = true) } ||
+                            officerSchedule?.contains("Second Schedule", ignoreCase = true) == true
+
+            for (rule in activeRules) {
+                val isIncluded = when (rule.ruleId) {
+                    "R6_004", "R6_001", "R6_005", "R6_006", "R6_007", "R6_008" -> hasRule6
+                    "R6_011" -> hasUsp
+                    "Rule 7(1)" -> hasFont
+                    "R6_003" -> hasOrigin
+                    "R_VEG_DOT" -> hasVeg
+                    "R_DRAINED_WT" -> hasDrained
+                    "R_SCHED_2" -> hasSched2
+                    else -> true
+                }
+
+                if (isIncluded) {
+                    finalActiveRules.add(rule)
+                } else {
+                    excludedRules.add(
+                        rule.copy(
+                            mandatory = false,
+                            reason = "Excluded by Officer Active Checklist Scope."
+                        )
+                    )
+                }
+            }
+        } else {
+            finalActiveRules.addAll(activeRules)
+        }
+
         val applicabilityConfidence = (classification.confidence * 0.95f).coerceIn(0.60f, 0.99f)
 
         return ApplicableRuleSet(
-            activeRules = activeRules,
+            activeRules = finalActiveRules,
             excludedRules = excludedRules,
             permittedUnits = permittedUnits,
-            statutoryReferences = statutoryRefs,
+            statutoryReferences = statutoryRefs.distinct(),
             applicabilityConfidence = applicabilityConfidence
         )
     }

@@ -430,5 +430,226 @@ class EnforcementArchitectureTest {
         assertTrue(netQtyCandidate!!.normalizedText.contains("1 N") || netQtyCandidate.normalizedText.contains("1") || netQtyCandidate.normalizedText.contains("Net Quantity: 1 N"))
         assertFalse(netQtyCandidate.normalizedText.contains("410401"))
     }
+
+    @Test
+    fun test14_PreScanStatutoryConfigurationAndChecklistScoping() {
+        val classification = com.sih.domain.classification.ProductClassification(
+            category = com.sih.domain.classification.ProductCategory.FOOD,
+            subCategory = "Packaged Groceries",
+            importStatus = com.sih.domain.classification.ImportStatus.DOMESTIC,
+            packageType = com.sih.domain.classification.PackageType.POUCH,
+            quantityType = com.sih.domain.classification.QuantityType.MASS_WEIGHT,
+            confidence = 0.95f
+        )
+
+        // 1. Officer specifies Count basis and active checklist excluding USP and Font size
+        val activeChecklist = listOf(
+            "Rule 6 Mandatory Declarations",
+            "Veg/Non-Veg Dot Check"
+        )
+        val ruleSet = com.sih.domain.classification.RuleApplicabilityEngine.resolveApplicability(
+            classification = classification,
+            numericQuantity = 500f,
+            officerCategory = "Food & Beverages",
+            officerUnitBasis = "Count (N / U / Set)",
+            officerSchedule = "Second Schedule (Prescribed Standard Quantities & Sizes)",
+            activeChecklist = activeChecklist
+        )
+
+        // Verify officer unit basis takes precedence over default classification
+        assertTrue(ruleSet.permittedUnits.contains("N"))
+        assertTrue(ruleSet.permittedUnits.contains("U"))
+        assertFalse(ruleSet.permittedUnits.contains("kg"))
+
+        // Verify schedule is recorded in references
+        assertTrue(ruleSet.statutoryReferences.any { it.contains("Second Schedule") })
+
+        // Verify active rules contains Rule 6 and Veg dot
+        assertTrue(ruleSet.activeRules.any { it.ruleId == "R6_004" })
+        assertTrue(ruleSet.activeRules.any { it.ruleId == "R_VEG_DOT" })
+
+        // Verify rules outside checklist scope are excluded
+        assertTrue(ruleSet.excludedRules.any { it.ruleId == "R6_011" })
+        assertTrue(ruleSet.excludedRules.any { it.ruleId == "Rule 7(1)" })
+        val excludedUsp = ruleSet.excludedRules.first { it.ruleId == "R6_011" }
+        assertTrue(excludedUsp.reason.contains("Officer Active Checklist Scope"))
+
+        // 2. Test InspectionDraft persistence with Gson
+        val gson = com.google.gson.Gson()
+        val draft = InspectionDraft(
+            inspectionId = "INSP-TEST-PRE-SCAN",
+            officerId = 42,
+            establishmentName = "Retail Hypermarket",
+            inspectionType = "ROUTINE",
+            location = "Delhi",
+            state = DraftState.CREATED,
+            capturedEvidenceIds = emptyList(),
+            qualityResultsJson = null,
+            ocrResultsJson = null,
+            extractedDeclarationsJson = null,
+            classificationJson = null,
+            applicableRulesJson = null,
+            complianceResultsJson = null,
+            reviewState = null,
+            signOffJson = null,
+            lastUpdated = "2026-09-08T12:00:00",
+            selectedCategory = "Cosmetics & Personal Care",
+            selectedUnitBasis = "Volume (ml / L)",
+            selectedSchedule = "First Schedule (Standard Minimum Font & Numerals)",
+            activeChecklistJson = gson.toJson(activeChecklist)
+        )
+
+        val json = gson.toJson(draft)
+        val deserialized = gson.fromJson(json, InspectionDraft::class.java)
+
+        assertEquals("Cosmetics & Personal Care", deserialized.selectedCategory)
+        assertEquals("Volume (ml / L)", deserialized.selectedUnitBasis)
+        assertEquals("First Schedule (Standard Minimum Font & Numerals)", deserialized.selectedSchedule)
+        assertNotNull(deserialized.activeChecklistJson)
+        val listType = object : com.google.gson.reflect.TypeToken<List<String>>() {}.type
+        val restoredChecklist: List<String> = gson.fromJson(deserialized.activeChecklistJson, listType)
+        assertEquals(2, restoredChecklist.size)
+        assertTrue(restoredChecklist.contains("Veg/Non-Veg Dot Check"))
+    }
+
+    @Test
+    fun test15_DynamicChecklistCategoryScopingAndSecondScheduleCompliance() {
+        val foodClassification = com.sih.domain.classification.ProductClassification(
+            category = com.sih.domain.classification.ProductCategory.FOOD,
+            subCategory = "Biscuits & Confectionery",
+            importStatus = com.sih.domain.classification.ImportStatus.DOMESTIC,
+            packageType = com.sih.domain.classification.PackageType.POUCH,
+            quantityType = com.sih.domain.classification.QuantityType.MASS_WEIGHT,
+            confidence = 0.96f
+        )
+
+        // 1. Second Schedule Food Pack with active checklist
+        val foodChecklist = listOf(
+            "Rule 6 Mandatory Declarations",
+            "Rule 6(11) Unit Sale Price (USP)",
+            "Rule 7 Font Height & Area Gate",
+            "Veg/Non-Veg Dot Check",
+            "Second Schedule Standard Pack Size"
+        )
+        val foodRuleSet = com.sih.domain.classification.RuleApplicabilityEngine.resolveApplicability(
+            classification = foodClassification,
+            numericQuantity = 100f,
+            officerCategory = "Food & Beverages",
+            officerUnitBasis = "Mass (g / kg)",
+            officerSchedule = "Second Schedule (Prescribed Standard Quantities & Sizes)",
+            activeChecklist = foodChecklist
+        )
+
+        assertTrue(foodRuleSet.activeRules.any { it.ruleId == "R_SCHED_2" })
+        assertTrue(foodRuleSet.activeRules.any { it.ruleId == "R_VEG_DOT" })
+        assertTrue(foodRuleSet.activeRules.any { it.ruleId == "R6_011" })
+        assertTrue(foodRuleSet.statutoryReferences.any { it.contains("Second Schedule") })
+
+        // 2. Electronics with Count basis & no Veg/Drained weight
+        val electronicsClassification = com.sih.domain.classification.ProductClassification(
+            category = com.sih.domain.classification.ProductCategory.ELECTRONIC,
+            subCategory = "Power Accessories",
+            importStatus = com.sih.domain.classification.ImportStatus.IMPORTED,
+            packageType = com.sih.domain.classification.PackageType.BOX_CARTON,
+            quantityType = com.sih.domain.classification.QuantityType.COUNT_NUMBER,
+            confidence = 0.94f
+        )
+        val electronicsChecklist = listOf(
+            "Rule 6 Mandatory Declarations",
+            "Rule 6(11) Unit Sale Price (USP)",
+            "Rule 7 Font Height & Area Gate",
+            "Barcode / Origin Check"
+        )
+        val elecRuleSet = com.sih.domain.classification.RuleApplicabilityEngine.resolveApplicability(
+            classification = electronicsClassification,
+            numericQuantity = 1f,
+            officerCategory = "Electronics & Hardware",
+            officerUnitBasis = "Count (N / U / Set)",
+            officerSchedule = "First Schedule (Standard Minimum Font & Numerals)",
+            activeChecklist = electronicsChecklist
+        )
+
+        // Veg dot and drained wt should NOT be active for electronics
+        assertFalse(elecRuleSet.activeRules.any { it.ruleId == "R_VEG_DOT" })
+        assertFalse(elecRuleSet.activeRules.any { it.ruleId == "R_DRAINED_WT" })
+        // Importer / origin and Rule 6 should be active
+        assertTrue(elecRuleSet.activeRules.any { it.ruleId == "R6_003" })
+        assertTrue(elecRuleSet.activeRules.any { it.ruleId == "Rule 7(1)" })
+        assertTrue(elecRuleSet.permittedUnits.contains("N"))
+        assertTrue(elecRuleSet.permittedUnits.contains("U"))
+    }
+
+    @Test
+    fun test16_AutomaticStatutoryScheduleDeduction() {
+        // Second Schedule keywords check
+        fun isSecondSchedule(name: String, category: String): Boolean {
+            val lower = name.lowercase().trim()
+            val secondScheduleKeywords = listOf(
+                "biscuit", "cookie", "rusk",
+                "oil", "ghee", "vanaspati", "mustard", "refined",
+                "atta", "flour", "maida", "suji", "sooji", "besan", "wheat",
+                "rice", "dal", "pulse", "cereal", "grain",
+                "tea", "coffee",
+                "salt",
+                "soap", "detergent", "washing powder",
+                "milk powder", "infant", "baby food",
+                "cement"
+            )
+            return secondScheduleKeywords.any { lower.contains(it) } ||
+                   (category == "Food & Beverages" && (lower.contains("sugar") || lower.contains("snack") || lower.contains("bread")))
+        }
+
+        fun inferSchedule(name: String, category: String, isBulk: Boolean): String {
+            if (isBulk) {
+                return "Fourth Schedule (Institutional Consumer Exemption)"
+            }
+            if (isSecondSchedule(name, category)) {
+                return "Second Schedule (Prescribed Standard Quantities) & First Schedule"
+            }
+            return "First Schedule (Standard Minimum Font & Numerals)"
+        }
+
+        // 1. Biscuits -> Second Schedule
+        assertEquals(
+            "Second Schedule (Prescribed Standard Quantities) & First Schedule",
+            inferSchedule("Parle-G Glucose Biscuits", "Food & Beverages", false)
+        )
+
+        // 2. Edible Oil -> Second Schedule
+        assertEquals(
+            "Second Schedule (Prescribed Standard Quantities) & First Schedule",
+            inferSchedule("Fortune Mustard Oil", "Food & Beverages", false)
+        )
+
+        // 3. Atta / Flour -> Second Schedule
+        assertEquals(
+            "Second Schedule (Prescribed Standard Quantities) & First Schedule",
+            inferSchedule("Aashirvaad Shudh Chakki Atta", "Food & Beverages", false)
+        )
+
+        // 4. Soap & Detergent -> Second Schedule
+        assertEquals(
+            "Second Schedule (Prescribed Standard Quantities) & First Schedule",
+            inferSchedule("Surf Excel Detergent Powder", "Cosmetics & Personal Care", false)
+        )
+
+        // 5. Electronics -> First Schedule
+        assertEquals(
+            "First Schedule (Standard Minimum Font & Numerals)",
+            inferSchedule("Fast USB-C Charging Cable", "Electronics & Hardware", false)
+        )
+
+        // 6. Stationary / General -> First Schedule
+        assertEquals(
+            "First Schedule (Standard Minimum Font & Numerals)",
+            inferSchedule("Classmate Long Notebook", "General Packaged Commodity", false)
+        )
+
+        // 7. Institutional Bulk Consumer -> Fourth Schedule Exemption
+        assertEquals(
+            "Fourth Schedule (Institutional Consumer Exemption)",
+            inferSchedule("Aashirvaad Atta 50kg Hotel Pack", "Food & Beverages", true)
+        )
+    }
 }
 

@@ -57,16 +57,24 @@ object OnDeviceAiEngine {
         context: Context, 
         imageUri: Uri, 
         qualityResult: ImageQualityResult? = null,
-        initialCommodity: String? = null
+        initialCommodity: String? = null,
+        officerCategory: String? = null,
+        officerUnitBasis: String? = null,
+        officerSchedule: String? = null,
+        activeChecklist: List<String> = emptyList()
     ): FullInspectionResponse {
-        return processImagesLocally(context, listOf(imageUri), qualityResult, initialCommodity)
+        return processImagesLocally(context, listOf(imageUri), qualityResult, initialCommodity, officerCategory, officerUnitBasis, officerSchedule, activeChecklist)
     }
 
     suspend fun processImagesLocally(
         context: Context, 
         imageUris: List<Uri>, 
         qualityResult: ImageQualityResult? = null,
-        initialCommodity: String? = null
+        initialCommodity: String? = null,
+        officerCategory: String? = null,
+        officerUnitBasis: String? = null,
+        officerSchedule: String? = null,
+        activeChecklist: List<String> = emptyList()
     ): FullInspectionResponse {
         if (imageUris.isEmpty()) {
             return buildFallbackFromText(context, Uri.EMPTY, "", initialCommodity)
@@ -279,16 +287,39 @@ object OnDeviceAiEngine {
 
             // 1. Formal Product Classification (Multi-Signal Scoring using Officer Commodity)
             val activeCommodityName = initialCommodity?.trim()?.ifBlank { null } ?: commodityDecl?.text
-            val classification = ProductClassifier.classify(
+            var classification = ProductClassifier.classify(
                 fullText = fullText,
                 detectedCommodity = activeCommodityName,
                 detectedNetQuantity = netQtyDecl?.text,
                 detectedManufacturer = mfgDecl?.text ?: packerDecl?.text
             )
 
+            val effectiveCategoryStr = officerCategory ?: com.sih.repository.InspectionRepository.currentSelectedCategory
+            val effectiveUnitBasisStr = officerUnitBasis ?: com.sih.repository.InspectionRepository.currentSelectedUnitBasis
+            val effectiveScheduleStr = officerSchedule ?: com.sih.repository.InspectionRepository.currentSelectedSchedule
+            val effectiveChecklist = if (activeChecklist.isNotEmpty()) activeChecklist else com.sih.repository.InspectionRepository.currentActiveChecklist
+
+            if (!effectiveCategoryStr.isNullOrBlank()) {
+                val categoryOverride = when {
+                    effectiveCategoryStr.contains("Food", ignoreCase = true) -> com.sih.domain.classification.ProductCategory.FOOD
+                    effectiveCategoryStr.contains("Cosmetic", ignoreCase = true) -> com.sih.domain.classification.ProductCategory.COSMETIC
+                    effectiveCategoryStr.contains("Electronic", ignoreCase = true) || effectiveCategoryStr.contains("Hardware", ignoreCase = true) -> com.sih.domain.classification.ProductCategory.ELECTRONIC
+                    effectiveCategoryStr.contains("Textile", ignoreCase = true) -> com.sih.domain.classification.ProductCategory.OTHER
+                    else -> classification.category
+                }
+                classification = classification.copy(category = categoryOverride)
+            }
+
             // 2. Statutory Rule Applicability Resolution
             val numericQty = parseNumericQuantityInGramsOrMl(netQtyDecl?.text)
-            val applicableRuleSet = RuleApplicabilityEngine.resolveApplicability(classification, numericQty)
+            val applicableRuleSet = RuleApplicabilityEngine.resolveApplicability(
+                classification = classification,
+                numericQuantity = numericQty,
+                officerCategory = effectiveCategoryStr,
+                officerUnitBasis = effectiveUnitBasisStr,
+                officerSchedule = effectiveScheduleStr,
+                activeChecklist = effectiveChecklist
+            )
             Log.d(TAG, "Classification: ${classification.category.name} (${classification.subCategory}), Commodity: '$activeCommodityName', Conf: ${classification.confidence}, ActiveRules: ${applicableRuleSet.activeRules.size}, ExcludedRules: ${applicableRuleSet.excludedRules.size}")
 
             val declarations = mutableListOf<DeclarationDto>()
@@ -692,7 +723,11 @@ object OnDeviceAiEngine {
                 inspectionState = "RULE_EVALUATION",
                 establishmentName = com.sih.repository.InspectionRepository.currentEstablishmentName,
                 inspectionType = com.sih.repository.InspectionRepository.currentInspectionType,
-                location = com.sih.repository.InspectionRepository.currentLocation
+                location = com.sih.repository.InspectionRepository.currentLocation,
+                selectedCategory = effectiveCategoryStr,
+                selectedUnitBasis = effectiveUnitBasisStr,
+                selectedSchedule = effectiveScheduleStr,
+                activeChecklist = effectiveChecklist
             )
         } catch (e: Exception) {
             Log.e(TAG, "On-device OCR error: ${e.message}", e)
@@ -1324,11 +1359,23 @@ object OnDeviceAiEngine {
             EvidenceDto(1, 1, imagePath, null, 0.85f)
         )
 
+        val effCategory = com.sih.repository.InspectionRepository.currentSelectedCategory
+        val effUnit = com.sih.repository.InspectionRepository.currentSelectedUnitBasis
+        val effSchedule = com.sih.repository.InspectionRepository.currentSelectedSchedule
+        val effChecklist = com.sih.repository.InspectionRepository.currentActiveChecklist
+
         val fallbackClassification = ProductClassifier.classify(
             fullText = "",
             detectedCommodity = initialCommodity
         )
-        val fallbackRuleSet = RuleApplicabilityEngine.resolveApplicability(fallbackClassification, 0f)
+        val fallbackRuleSet = RuleApplicabilityEngine.resolveApplicability(
+            classification = fallbackClassification,
+            numericQuantity = 0f,
+            officerCategory = effCategory,
+            officerUnitBasis = effUnit,
+            officerSchedule = effSchedule,
+            activeChecklist = effChecklist
+        )
 
         return FullInspectionResponse(
             inspectionId = inspId,
@@ -1351,7 +1398,11 @@ object OnDeviceAiEngine {
             imagePath = imagePath,
             classification = fallbackClassification,
             applicableRuleSet = fallbackRuleSet,
-            createdAt = LocalDateTime.now().toString()
+            createdAt = LocalDateTime.now().toString(),
+            selectedCategory = effCategory,
+            selectedUnitBasis = effUnit,
+            selectedSchedule = effSchedule,
+            activeChecklist = effChecklist
         )
     }
 

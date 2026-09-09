@@ -69,7 +69,15 @@ object LocalBackendServer {
             overallConfidence = full.confidence?.overall,
             createdAt = full.createdAt,
             declarations = full.declarations ?: emptyList(),
-            violations = full.violations ?: emptyList()
+            violations = full.violations ?: emptyList(),
+            classification = full.classification,
+            applicableRuleSet = full.applicableRuleSet,
+            productName = full.product?.name,
+            product = full.product,
+            selectedCategory = full.selectedCategory,
+            selectedUnitBasis = full.selectedUnitBasis,
+            selectedSchedule = full.selectedSchedule,
+            activeChecklist = full.activeChecklist
         )
     }
 

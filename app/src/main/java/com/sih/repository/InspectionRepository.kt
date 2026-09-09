@@ -42,6 +42,10 @@ object InspectionRepository {
     var currentLocation: String? = null
     var currentNumberOfPackages: String? = null
     var currentRemarks: String? = null
+    var currentSelectedCategory: String? = null
+    var currentSelectedUnitBasis: String? = null
+    var currentSelectedSchedule: String? = null
+    var currentActiveChecklist: List<String> = emptyList()
 
     fun saveDraft(context: Context, draft: com.sih.model.InspectionDraft) {
         currentDraft = draft
@@ -101,6 +105,10 @@ object InspectionRepository {
         currentLocation = null
         currentNumberOfPackages = null
         currentRemarks = null
+        currentSelectedCategory = null
+        currentSelectedUnitBasis = null
+        currentSelectedSchedule = null
+        currentActiveChecklist = emptyList()
     }
 
     suspend fun login(email: String, pass: String): Result<User> {
@@ -176,14 +184,29 @@ object InspectionRepository {
     suspend fun runInspection(context: Context, imageUris: List<Uri>, productName: String? = null): Result<FullInspectionResponse> {
         return try {
             // First run on-device ML Kit OCR & rule engine across all captured image sides with quality context and officer ground-truth commodity
-            val localResult = OnDeviceAiEngine.processImagesLocally(context, imageUris, currentQualityResult, productName)
-            currentInspection = localResult
-            currentInspectionId = localResult.inspectionId
+            val localResult = OnDeviceAiEngine.processImagesLocally(
+                context = context,
+                imageUris = imageUris,
+                qualityResult = currentQualityResult,
+                initialCommodity = productName,
+                officerCategory = currentSelectedCategory,
+                officerUnitBasis = currentSelectedUnitBasis,
+                officerSchedule = currentSelectedSchedule,
+                activeChecklist = currentActiveChecklist
+            )
+            val populatedResult = localResult.copy(
+                selectedCategory = currentSelectedCategory,
+                selectedUnitBasis = currentSelectedUnitBasis,
+                selectedSchedule = currentSelectedSchedule,
+                activeChecklist = currentActiveChecklist
+            )
+            currentInspection = populatedResult
+            currentInspectionId = populatedResult.inspectionId
 
             // Immediately persist to on-device database
-            LocalBackendServer.saveInspection(localResult)
+            LocalBackendServer.saveInspection(populatedResult)
 
-            Result.success(localResult)
+            Result.success(populatedResult)
         } catch (e: Exception) {
             android.util.Log.e("InspectionRepository", "Inspect exception: ${e.message}", e)
             Result.failure(e)
@@ -283,7 +306,7 @@ object InspectionRepository {
             inspectionId = System.currentTimeMillis().toInt().let { if (it < 0) -it else it },
             product = com.sih.network.dto.ProductDto(
                 id = null,
-                name = "Scanned Commodity Package",
+                name = activeCommodityName ?: "Scanned Commodity Package",
                 manufacturer = null,
                 netQuantity = null,
                 mrp = null
@@ -296,7 +319,11 @@ object InspectionRepository {
             compliance = com.sih.network.dto.ComplianceDto("REVIEW"),
             inspector = com.sih.network.dto.InspectorDto(null, null, null),
             imagePath = imagePath,
-            createdAt = java.time.LocalDateTime.now().toString()
+            createdAt = java.time.LocalDateTime.now().toString(),
+            selectedCategory = currentSelectedCategory,
+            selectedUnitBasis = currentSelectedUnitBasis,
+            selectedSchedule = currentSelectedSchedule,
+            activeChecklist = currentActiveChecklist
         )
         currentInspection = fallback
         currentInspectionId = fallback.inspectionId

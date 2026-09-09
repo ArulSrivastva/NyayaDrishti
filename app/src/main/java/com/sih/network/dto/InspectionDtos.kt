@@ -132,7 +132,11 @@ data class FullInspectionResponse(
     @SerializedName("inspection_state") val inspectionState: String? = null,
     @SerializedName("establishment_name") val establishmentName: String? = null,
     @SerializedName("inspection_type") val inspectionType: String? = null,
-    @SerializedName("location") val location: String? = null
+    @SerializedName("location") val location: String? = null,
+    @SerializedName("selected_category") val selectedCategory: String? = null,
+    @SerializedName("selected_unit_basis") val selectedUnitBasis: String? = null,
+    @SerializedName("selected_schedule") val selectedSchedule: String? = null,
+    @SerializedName("active_checklist") val activeChecklist: List<String>? = null
 )
 
 data class InspectionDetailOutDto(
@@ -158,7 +162,11 @@ data class InspectionDetailOutDto(
     @SerializedName("classification") val classification: ProductClassification? = null,
     @SerializedName("applicable_rule_set") val applicableRuleSet: ApplicableRuleSet? = null,
     @SerializedName("product_name") val productName: String? = null,
-    @SerializedName("product") val product: ProductDto? = null
+    @SerializedName("product") val product: ProductDto? = null,
+    @SerializedName("selected_category") val selectedCategory: String? = null,
+    @SerializedName("selected_unit_basis") val selectedUnitBasis: String? = null,
+    @SerializedName("selected_schedule") val selectedSchedule: String? = null,
+    @SerializedName("active_checklist") val activeChecklist: List<String>? = null
 )
 
 data class DecisionRequestDto(
